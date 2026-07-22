@@ -876,7 +876,7 @@ function DirectoryView({ branches, onOpenBranch, onGoJoin, session }) {
           </div>
         )}
         {!session && <button onClick={onGoJoin} className="btn-primary" style={{ ...primaryBtn, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-          <Plus size={15} /> Unirme con código de admin
+          <Plus size={15} /> Unirme
         </button>}
       </div>
 

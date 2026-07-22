@@ -500,6 +500,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [visitorBranchId, setVisitorBranchId] = useState(branches.find((b) => b.status === "approved")?.id || "");
   const [error, setError] = useState("");
 
   const TYPE_LABELS = {
@@ -533,7 +534,20 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       return;
     }
 
-    if (!code) { setError("Ingresa el código de invitación de tu rama."); return; }
+    if (accountType === "visitor") {
+      const branch = branches.find((b) => b.id === visitorBranchId && b.status === "approved");
+      if (!branch) { setError("Selecciona la rama que deseas observar."); return; }
+      const account = {
+        id: uid(), name, email, password, branchId: branch.id, role: "visitor",
+        active: true, expiresAt: addMonths(new Date(), 3).toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+      setAccounts([...accounts, account]);
+      onLogin(account);
+      return;
+    }
+
+    if (!code) { setError("Ingresa el código asignado por las oficinas de tu rama."); return; }
     const upperCode = code.trim().toUpperCase();
     const branch = branches.find((b) => b.status === "approved" && (
       (accountType === "member" && b.inviteCode === upperCode) ||
@@ -591,7 +605,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
             <span>
               {accountType === "member" && "Necesitas el código de invitación de tu rama."}
               {accountType === "missionary" && "Necesitas el código de misioneros de tu rama."}
-              {accountType === "visitor" && "Código temporal válido por 3 meses."}
+              {accountType === "visitor" && "Puedes solicitar acceso como observador durante 3 meses."}
               {accountType === "admin" && "Necesitas un código de invitación emitido por el administrador de una rama ya aceptada en la red."}
             </span>
           </div>
@@ -604,8 +618,14 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         )}
         <input placeholder="Correo electrónico" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
         <input type="password" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
-        {mode === "register" && (
-          <input placeholder={accountType === "admin" ? "Código de invitación (ej: RED-7X2K9P)" : "Código de invitación"} value={code} onChange={(e) => setCode(e.target.value)} style={inputStyle} />
+        {mode === "register" && accountType === "visitor" && (
+          <select value={visitorBranchId} onChange={(e) => setVisitorBranchId(e.target.value)} style={inputStyle}>
+            <option value="">Selecciona una rama para observar</option>
+            {branches.filter((b) => b.status === "approved").map((b) => <option key={b.id} value={b.id}>{b.name} — {b.location}</option>)}
+          </select>
+        )}
+        {mode === "register" && accountType !== "visitor" && (
+          <input placeholder="Código asignado por las oficinas" value={code} onChange={(e) => setCode(e.target.value)} style={inputStyle} />
         )}
         {error && (
           <div style={{ fontSize: 12, color: "#a33", display: "flex", gap: 6, alignItems: "flex-start" }}>
@@ -1499,6 +1519,7 @@ function MissionariesView({ missionaries, setMissionaries, companionships, setCo
 function PhotosView({ photos, setPhotos, branchId, session }) {
   const [caption, setCaption] = useState("");
   const [preview, setPreview] = useState(null);
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
   const fileRef = useRef(null);
   const approved = photos.filter((p) => p.branchId === branchId && p.status === "approved");
 
@@ -1550,7 +1571,7 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
       <div className="card-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
         {approved.map((p) => (
           <div key={p.id} style={{ border: "1px solid #e4e4e0", borderRadius: 12, overflow: "hidden" }}>
-            <img src={p.dataUrl} alt={p.caption} style={{ width: "100%", height: 140, objectFit: "cover", display: "block" }} />
+            <img src={p.dataUrl} alt={p.caption} onClick={() => setSelectedPhoto(p)} style={{ width: "100%", height: 220, objectFit: "contain", background: "#f4f4f1", display: "block", cursor: "zoom-in" }} />
             <div style={{ padding: 8 }}>
               {p.caption && <div style={{ fontSize: 12 }}>{p.caption}</div>}
               <div style={{ fontSize: 10, color: "#9a9a92" }}>{p.author}</div>
@@ -1559,6 +1580,11 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
         ))}
         {approved.length === 0 && <div style={{ color: "#9a9a92", fontSize: 13 }}>Aún no hay fotos publicadas.</div>}
       </div>
+      {selectedPhoto && (
+        <div onClick={() => setSelectedPhoto(null)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(0,0,0,0.82)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24, cursor: "zoom-out" }}>
+          <img src={selectedPhoto.dataUrl} alt={selectedPhoto.caption} style={{ maxWidth: "96vw", maxHeight: "92vh", objectFit: "contain" }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1872,13 +1898,14 @@ function CentralRegisterCard({ onSubmit, otherBranches }) {
   );
 }
 
-function AdminView({ branches, setBranches, speakers, photos, setPhotos, missionaries, setMissionaries, accounts, setAccounts, session, events, ordinances, members, companionships, messages, branchCredentials, setBranchCredentials }) {
+function AdminView({ branches, setBranches, speakers, photos, setPhotos, missionaries, setMissionaries, accounts, setAccounts, session, events, ordinances, members, companionships, messages, setMessages, branchCredentials, setBranchCredentials }) {
   const [copiedCode, setCopiedCode] = useState(null);
   const [transferTarget, setTransferTarget] = useState(null);
   const [verification, setVerification] = useState({ status: "idle", message: "" });
   const myBranch = branches.find((b) => b.adminId === session.id);
   const myCredential = myBranch ? branchCredentials.find((c) => c.branchId === myBranch.id) : null;
-  const pendingPhotos = myBranch ? photos.filter((p) => p.status === "pending" && p.branchId === myBranch.id) : [];
+  const branchPhotos = myBranch ? photos.filter((p) => p.branchId === myBranch.id) : [];
+  const branchMessages = myBranch ? messages.filter((m) => m.branchId === myBranch.id) : [];
   const branchMissionaries = myBranch ? missionaries.filter((m) => m.branchId === myBranch.id) : [];
   const parentBranch = myBranch?.parentBranchId ? branches.find((b) => b.id === myBranch.parentBranchId) : null;
   const otherApprovedBranches = branches.filter((b) => b.status === "approved" && b.id !== myBranch?.id);
@@ -2058,17 +2085,17 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
           onClose={() => setTransferTarget(null)} onConfirm={(targetId) => transferMissionary(transferTarget, targetId)} />
       )}
 
-      <div style={{ fontWeight: 500, fontSize: 14, margin: "24px 0 8px" }}>Fotos pendientes de aprobación ({pendingPhotos.length})</div>
-      {pendingPhotos.length === 0 && <div style={{ fontSize: 13, color: "#9a9a92", marginBottom: 20 }}>No hay fotos pendientes.</div>}
+      <div style={{ fontWeight: 500, fontSize: 14, margin: "24px 0 8px" }}>Fotos de la rama ({branchPhotos.length})</div>
+      {branchPhotos.length === 0 && <div style={{ fontSize: 13, color: "#9a9a92", marginBottom: 20 }}>No hay fotos.</div>}
       <div className="card-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 20 }}>
-        {pendingPhotos.map((p) => (
+        {branchPhotos.map((p) => (
           <div key={p.id} style={{ border: "1px solid #e4e4e0", borderRadius: 10, overflow: "hidden" }}>
-            <img src={p.dataUrl} alt={p.caption} style={{ width: "100%", height: 100, objectFit: "cover", display: "block" }} />
+            <img src={p.dataUrl} alt={p.caption} style={{ width: "100%", height: 180, objectFit: "contain", background: "#f4f4f1", display: "block" }} />
             <div style={{ padding: 6, fontSize: 11 }}>
               <div style={{ color: "#767670", marginBottom: 4 }}>{p.author}</div>
               <div style={{ display: "flex", gap: 6 }}>
-                <button onClick={() => setPhotos(photos.map((x) => (x.id === p.id ? { ...x, status: "approved" } : x)))}
-                  style={{ border: "none", background: "#1f5c3f", color: "#fff", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", flex: 1 }}>Aprobar</button>
+                {p.status === "pending" && <button onClick={() => setPhotos(photos.map((x) => (x.id === p.id ? { ...x, status: "approved" } : x)))}
+                  style={{ border: "none", background: "#1f5c3f", color: "#fff", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", flex: 1 }}>Aprobar</button>}
                 <button onClick={() => setPhotos(photos.filter((x) => x.id !== p.id))}
                   style={{ border: "1px solid #e4e4e0", background: "#fff", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer" }}><Trash2 size={12} /></button>
               </div>
@@ -2076,6 +2103,15 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
           </div>
         ))}
       </div>
+
+      <div style={{ fontWeight: 500, fontSize: 14, margin: "24px 0 8px" }}>Mensajes del chat ({branchMessages.length})</div>
+      {branchMessages.length === 0 && <div style={{ fontSize: 13, color: "#9a9a92" }}>No hay mensajes.</div>}
+      {branchMessages.map((message) => (
+        <div key={message.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderBottom: "1px solid #eef1ee", padding: "8px 0", fontSize: 12 }}>
+          <div><strong>{message.author}</strong><div style={{ color: "#767670" }}>{message.text}</div></div>
+          <button onClick={() => setMessages(messages.filter((item) => item.id !== message.id))} title="Eliminar mensaje" style={{ ...iconBtnStyle, color: "#a33" }}><Trash2 size={13} /></button>
+        </div>
+      ))}
 
       <div style={{ fontWeight: 500, fontSize: 14, margin: "24px 0 8px" }}>Discursos agendados ({speakers.length})</div>
       {speakers.length === 0 && <div style={{ fontSize: 13, color: "#9a9a92" }}>Aún no hay discursos agendados.</div>}
@@ -2226,7 +2262,7 @@ export default function App() {
           <AdminView branches={branches} setBranches={setBranches} speakers={speakers} photos={photos} setPhotos={setPhotos}
             missionaries={missionaries} setMissionaries={setMissionaries} accounts={accounts} setAccounts={setAccounts}
             session={session} events={events} ordinances={ordinances} members={members} companionships={companionships}
-            messages={messages} branchCredentials={branchCredentials} setBranchCredentials={setBranchCredentials} />
+            messages={messages} setMessages={setMessages} branchCredentials={branchCredentials} setBranchCredentials={setBranchCredentials} />
         ) : (
           <div className="container-page" style={{ padding: 60, textAlign: "center" }}>
             <AlertCircle size={24} color="#9a9a92" style={{ marginBottom: 10 }} />

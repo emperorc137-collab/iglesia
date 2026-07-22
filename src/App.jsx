@@ -25,6 +25,12 @@ const STORAGE_KEYS = {
   BRANCH_CREDENTIALS: "branch_credentials",
 };
 
+const SUPABASE_STORE_KEYS = new Set([
+  STORAGE_KEYS.EVENTS, STORAGE_KEYS.SPEAKERS, STORAGE_KEYS.ORDINANCES, STORAGE_KEYS.MEMBERS,
+  STORAGE_KEYS.PHOTOS, STORAGE_KEYS.MESSAGES, STORAGE_KEYS.ACCOUNTS, STORAGE_KEYS.MISSIONARIES,
+  STORAGE_KEYS.COMPANIONSHIPS, STORAGE_KEYS.ADMIN_CODES, STORAGE_KEYS.BRANCH_CREDENTIALS,
+]);
+
 const LEADERSHIP_ROLES = ["Presidente de Rama", "Primer Consejero", "Segundo Consejero", "Secretario de Rama"];
 function hasLeadershipRole(session, members) {
   if (!session) return false;
@@ -63,17 +69,24 @@ const CHURCH_ROLES = [
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
+function secureCode(length = 6) {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(length);
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  else for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
+}
 function codePrefix(branchName) {
   return branchName.split(" ")[0].slice(0, 6).toUpperCase().replace(/[^A-Z]/g, "");
 }
 function genInviteCode(branchName) {
-  return `${codePrefix(branchName)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  return `${codePrefix(branchName)}-${secureCode(6)}`;
 }
 function genMissionaryCode(branchName) {
-  return `MIS-${codePrefix(branchName)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  return `MIS-${codePrefix(branchName)}-${secureCode(6)}`;
 }
 function genVisitorCode(branchName) {
-  return `VIS-${codePrefix(branchName)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+  return `VIS-${codePrefix(branchName)}-${secureCode(6)}`;
 }
 function addMonths(date, months) {
   const d = new Date(date);
@@ -185,8 +198,11 @@ function useStore(key, initial, shared = true) {
               if (insertError) throw insertError;
             if (mounted && inserted) setValue(inserted);
           }
+        } else if (shared && SUPABASE_STORE_KEYS.has(key)) {
+          const { data, error } = await supabase.from("app_store").select("value").eq("key", key).maybeSingle();
+          if (error) throw error;
+          if (mounted && data?.value) setValue(data.value);
         } else {
-          // Para otras claves, usar localStorage
           const stored = localStorage.getItem(key);
           if (mounted && stored) setValue(JSON.parse(stored));
         }
@@ -216,12 +232,16 @@ function useStore(key, initial, shared = true) {
           if (error) throw error;
         }
       } else {
-        // Guardar en localStorage
-        localStorage.setItem(key, JSON.stringify(next));
+        if (shared && SUPABASE_STORE_KEYS.has(key)) {
+          const { error } = await supabase.from("app_store").upsert({ key, value: next });
+          if (error) throw error;
+        } else {
+          localStorage.setItem(key, JSON.stringify(next));
+        }
       }
     } catch (e) {
-      console.warn("Supabase branches unavailable; using local storage.", e.message);
-      if (key === "branches") localStorage.setItem(key, JSON.stringify(next));
+      console.warn("Supabase store unavailable; using local storage.", e.message);
+      localStorage.setItem(key, JSON.stringify(next));
     }
   };
 
@@ -640,7 +660,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
   );
 }
 
-function DirectoryView({ branches, onOpenBranch, onGoJoin }) {
+function DirectoryView({ branches, onOpenBranch, onGoJoin, session }) {
   const [query, setQuery] = useState("");
   const [districtFilter, setDistrictFilter] = useState("");
   const [mapMode, setMapMode] = useState("geo");
@@ -668,9 +688,9 @@ function DirectoryView({ branches, onOpenBranch, onGoJoin }) {
             </select>
           </div>
         )}
-        <button onClick={onGoJoin} className="btn-primary" style={{ ...primaryBtn, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+        {!session && <button onClick={onGoJoin} className="btn-primary" style={{ ...primaryBtn, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
           <Plus size={15} /> Unirme con código de admin
-        </button>
+        </button>}
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
@@ -1111,12 +1131,13 @@ function nextSundays(count = 8) {
   return result;
 }
 
-function SpeakersView({ speakers, setSpeakers, branchId }) {
+function SpeakersView({ speakers, setSpeakers, branchId, session }) {
   const sundays = useMemo(() => nextSundays(8), []);
   const SLOTS_PER_SUNDAY = 2;
   const [nameInput, setNameInput] = useState("");
   const [pendingSlot, setPendingSlot] = useState(null);
-  const takenBySlot = (date, idx) => speakers.find((s) => s.date === date && s.slot === idx && s.branchId === branchId);
+  const branchSpeakers = speakers.filter((s) => s.branchId === branchId);
+  const takenBySlot = (date, idx) => branchSpeakers.find((s) => s.date === date && s.slot === idx);
 
   return (
     <div className="container-page" style={{ padding: 24, maxWidth: 700, margin: "0 auto" }}>
@@ -1133,13 +1154,13 @@ function SpeakersView({ speakers, setSpeakers, branchId }) {
                   <div key={idx} style={{ flex: "1 1 200px", borderRadius: 8, border: "1px solid " + (taken ? "#e4e4e0" : "#1f5c3f"), padding: 10, background: taken ? "#f7f7f5" : "#fff" }}>
                     <div style={{ fontSize: 11, color: "#9a9a92", marginBottom: 4 }}>Espacio {idx + 1}</div>
                     {taken ? (
-                      <div style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Check size={14} color="#1f5c3f" /> {taken.name}</div>
+                      <div style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}><Check size={14} color="#1f5c3f" /> {taken.name} {taken.status === "pending" && <Badge tone="pending">Pendiente</Badge>}</div>
                     ) : pendingSlot === `${date}-${idx}` ? (
                       <div style={{ display: "flex", gap: 6 }}>
                         <input autoFocus value={nameInput} onChange={(e) => setNameInput(e.target.value)} placeholder="Tu nombre"
                           style={{ flex: 1, padding: "6px 8px", borderRadius: 6, border: "1px solid #e4e4e0", fontSize: 12 }} />
                         <button onClick={() => {
-                          if (nameInput.trim()) { setSpeakers([...speakers, { id: uid(), date, slot: idx, name: nameInput.trim(), branchId }]); setNameInput(""); setPendingSlot(null); }
+                          if (nameInput.trim() && session) { setSpeakers([...speakers, { id: uid(), date, slot: idx, name: nameInput.trim(), branchId, status: "pending", createdBy: session.id, createdByName: session.name }]); setNameInput(""); setPendingSlot(null); }
                         }} style={{ border: "none", background: "#1f5c3f", color: "#fff", borderRadius: 6, padding: "0 10px", fontSize: 12, cursor: "pointer" }}>OK</button>
                       </div>
                     ) : (
@@ -1527,7 +1548,19 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => setPreview(reader.result);
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const maxDimension = 1800;
+        const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        setPreview(canvas.toDataURL("image/jpeg", 0.88));
+      };
+      image.src = reader.result;
+    };
     reader.readAsDataURL(file);
   };
 
@@ -1906,6 +1939,7 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
   const myCredential = myBranch ? branchCredentials.find((c) => c.branchId === myBranch.id) : null;
   const branchPhotos = myBranch ? photos.filter((p) => p.branchId === myBranch.id) : [];
   const branchMessages = myBranch ? messages.filter((m) => m.branchId === myBranch.id) : [];
+  const branchSpeakers = myBranch ? speakers.filter((s) => s.branchId === myBranch.id) : [];
   const branchMissionaries = myBranch ? missionaries.filter((m) => m.branchId === myBranch.id) : [];
   const parentBranch = myBranch?.parentBranchId ? branches.find((b) => b.id === myBranch.parentBranchId) : null;
   const otherApprovedBranches = branches.filter((b) => b.status === "approved" && b.id !== myBranch?.id);
@@ -2113,6 +2147,31 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
         </div>
       ))}
 
+      <div style={{ fontWeight: 500, fontSize: 14, margin: "24px 0 8px" }}>Discursos ({branchSpeakers.length})</div>
+      {branchSpeakers.length === 0 && <div style={{ fontSize: 13, color: "#9a9a92" }}>No hay discursos reservados.</div>}
+      {branchSpeakers.map((speaker) => (
+        <div key={speaker.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderBottom: "1px solid #eef1ee", padding: "8px 0", fontSize: 12 }}>
+          <div><strong>{speaker.name}</strong><div style={{ color: "#767670" }}>{speaker.date} · {speaker.status === "approved" ? "Aprobado" : "Pendiente"}</div></div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {speaker.status !== "approved" && <button onClick={() => setSpeakers(speakers.map((item) => item.id === speaker.id ? { ...item, status: "approved" } : item))} style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11 }}>Aprobar</button>}
+            <button onClick={() => setSpeakers(speakers.filter((item) => item.id !== speaker.id))} title="Eliminar discurso" style={{ ...iconBtnStyle, color: "#a33" }}><Trash2 size={13} /></button>
+          </div>
+        </div>
+      ))}
+
+      <div style={{ fontWeight: 500, fontSize: 14, margin: "24px 0 8px" }}>Usuarios ({accounts.length})</div>
+      {accounts.map((account) => (
+        <div key={account.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, borderBottom: "1px solid #eef1ee", padding: "8px 0", fontSize: 12 }}>
+          <div><strong>{account.name}</strong><div style={{ color: "#767670" }}>{account.email} · {account.role}</div></div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {account.id !== session.id && <>
+              <button onClick={() => setAccounts(accounts.map((item) => item.id === account.id ? { ...item, active: item.active === false } : item))} style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11 }}>{account.active === false ? "Activar" : "Desactivar"}</button>
+              <button onClick={() => setAccounts(accounts.filter((item) => item.id !== account.id))} title="Eliminar usuario" style={{ ...iconBtnStyle, color: "#a33" }}><Trash2 size={13} /></button>
+            </>}
+          </div>
+        </div>
+      ))}
+
       <div style={{ fontWeight: 500, fontSize: 14, margin: "24px 0 8px" }}>Discursos agendados ({speakers.length})</div>
       {speakers.length === 0 && <div style={{ fontSize: 13, color: "#9a9a92" }}>Aún no hay discursos agendados.</div>}
       {speakers.slice().sort((a, b) => a.date.localeCompare(b.date)).map((s) => (
@@ -2236,14 +2295,14 @@ export default function App() {
             primaryBranchId={primaryBranchId} onGoMissionaries={() => { setSelectedBranch(null); setView("missionaries"); }}
             onSelectBranch={handleSelectBranch} />
         ) : (
-          <DirectoryView branches={branches} onOpenBranch={handleSelectBranch} onGoJoin={() => setView("login")} />
+          <DirectoryView branches={branches} onOpenBranch={handleSelectBranch} onGoJoin={() => setView("login")} session={session} />
         )
       )}
 
       {view === "red" && <ManifestoView />}
       {view === "calendar" && <CalendarView events={events} setEvents={setEvents} branchId={primaryBranchId} session={session} members={members} />}
       {view === "ordinances" && <OrdinancesView ordinances={ordinances} setOrdinances={setOrdinances} branchId={primaryBranchId} session={session} members={members} />}
-      {view === "speakers" && <SpeakersView speakers={speakers} setSpeakers={setSpeakers} branchId={primaryBranchId} />}
+      {view === "speakers" && <SpeakersView speakers={speakers} setSpeakers={setSpeakers} branchId={primaryBranchId} session={session} />}
       {view === "members" && <MembersView members={members} setMembers={setMembers} branchId={primaryBranchId} session={session} />}
       {view === "missionaries" && (
         <MissionariesView missionaries={missionariesWithStatus} setMissionaries={setMissionaries} companionships={companionships}

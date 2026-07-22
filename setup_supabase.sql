@@ -142,6 +142,24 @@ CREATE TABLE invite_codes (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Almacenamiento compartido para módulos de la aplicación.
+-- Guarda cada colección como JSON para evitar localStorage y permitir acceso desde cualquier dispositivo.
+CREATE TABLE IF NOT EXISTS public.app_store (
+  key TEXT PRIMARY KEY,
+  value JSONB NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+ALTER TABLE public.app_store ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "app_store_read" ON public.app_store
+  FOR SELECT TO anon, authenticated USING (true);
+
+CREATE POLICY "app_store_write" ON public.app_store
+  FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+
+NOTIFY pgrst, 'reload schema';
+
 -- Habilitar RLS (Row Level Security)
 ALTER TABLE branches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE members ENABLE ROW LEVEL SECURITY;

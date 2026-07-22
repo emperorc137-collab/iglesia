@@ -2393,8 +2393,33 @@ export default function App() {
   }, [accounts]);
 
   useEffect(() => {
-    if (!accountsLoaded) return;
     let mounted = true;
+
+    const normalizeSession = async (sessionObj) => {
+      const authUser = sessionObj?.user;
+      if (!authUser || !mounted) return null;
+
+      const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
+      if (profileError) {
+        console.warn("No se pudo leer el perfil de Supabase:", profileError.message);
+      }
+      if (!mounted) return null;
+
+      if (profile) {
+        const normalized = normalizeProfileRow(profile);
+        const persisted = accountsRef.current.find((a) => a.id === normalized.id);
+        if (!persisted) setAccounts([...accountsRef.current, normalized]);
+        return normalized;
+      }
+
+      const authAccount = authSessionToAccount(sessionObj, accountsRef.current);
+      if (authAccount) {
+        setAccounts([...accountsRef.current, authAccount]);
+        return authAccount;
+      }
+
+      return null;
+    };
 
     const restoreAuthSession = async () => {
       const { data, error } = await supabase.auth.getSession();
@@ -2402,43 +2427,21 @@ export default function App() {
       if (error) {
         console.warn("No se pudo restaurar sesión Supabase:", error.message);
       }
-      const authUser = data?.session?.user;
-      if (authUser) {
-        const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
-        if (profileError) {
-          console.warn("No se pudo leer el perfil de Supabase:", profileError.message);
-        }
-        if (profile) {
-          const normalized = normalizeProfileRow(profile);
-          const persisted = accountsRef.current.find((a) => a.id === normalized.id);
-          if (!persisted) setAccounts([...accountsRef.current, normalized]);
-          setSession(normalized);
-        } else {
-          const authAccount = authSessionToAccount(data.session, accountsRef.current);
-          if (authAccount) {
-            setAccounts([...accountsRef.current, authAccount]);
-            setSession(authAccount);
-          }
-        }
-      }
+
+      const sessionObj = data?.session ?? data;
+      const restored = await normalizeSession(sessionObj);
+      if (restored) setSession(restored);
       setAuthChecked(true);
     };
 
     restoreAuthSession();
     const { data: listener } = supabase.auth.onAuthStateChange((_event, sessionData) => {
       if (!mounted) return;
-      const authUser = sessionData?.user;
-      if (authUser) {
-        const profile = accountsRef.current.find((a) => a.id === authUser.id);
-        if (profile) {
-          setSession(profile);
-        } else {
-          const authAccount = authSessionToAccount(sessionData, accountsRef.current);
-          if (authAccount) {
-            setAccounts([...accountsRef.current, authAccount]);
-            setSession(authAccount);
-          }
-        }
+      const sessionObj = sessionData?.session ?? sessionData;
+      if (sessionObj?.user) {
+        normalizeSession(sessionObj).then((normalized) => {
+          if (mounted && normalized) setSession(normalized);
+        });
       } else {
         setSession(null);
       }
@@ -2448,7 +2451,7 @@ export default function App() {
       mounted = false;
       listener?.subscription?.unsubscribe?.();
     };
-  }, [accountsLoaded]);
+  }, []);
 
   useEffect(() => {
     if (!branchesLoaded) return;

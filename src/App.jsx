@@ -2519,6 +2519,18 @@ export default function App() {
   const chatUnread = 0;
   const speakerGaps = 0;
 
+  if (!authChecked) {
+    return (
+      <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: "#f7f7f5", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <style dangerouslySetInnerHTML={{ __html: GLOBAL_CSS }} />
+        <div style={{ background: "#fff", borderRadius: 18, padding: 32, boxShadow: "0 18px 45px rgba(0,0,0,0.08)", textAlign: "center", maxWidth: 340, width: "100%" }}>
+          <div style={{ fontSize: 18, fontWeight: 600, color: "#1f5c3f", marginBottom: 10 }}>Cargando sesión...</div>
+          <div style={{ fontSize: 14, color: "#5f5f5f" }}>Restaurando tu sesión con Supabase.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: "#f7f7f5", minHeight: "100%" }}>
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_CSS }} />

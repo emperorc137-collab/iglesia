@@ -1,8 +1,16 @@
 // src/supabaseClient.js
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://mmxeesjiuzedmjdfopml.supabase.co'
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_1Hs9G0S53Qq3onYYK11skg_82Rndh3Q'
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Faltan las variables VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY en tu archivo .env.local')
+}
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Faltan las variables VITE_SUPABASE_URL o VITE_SUPABASE_ANON_KEY en tu archivo .env.local')
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {

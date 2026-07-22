@@ -19,6 +19,7 @@ const STORAGE_KEYS = {
   PHOTOS: "photos",
   MESSAGES: "messages",
   ACCOUNTS: "accounts",
+  SESSION: "activeSession",
   MISSIONARIES: "missionaries",
   COMPANIONSHIPS: "companionships",
   ADMIN_CODES: "admin_codes",
@@ -46,6 +47,9 @@ function normalizeProfileRow(row) {
 
 function profileToDb(profile) {
   const row = { ...profile };
+  delete row.localPassword;
+  delete row.localOnly;
+  delete row.password;
   if (row.branchId !== undefined) { row.branch_id = row.branchId; delete row.branchId; }
   if (row.invitedByBranchId !== undefined) { row.invited_by_branch_id = row.invitedByBranchId; delete row.invitedByBranchId; }
   if (row.expiresAt !== undefined) { row.expires_at = row.expiresAt; delete row.expiresAt; }
@@ -240,9 +244,27 @@ function useStore(key, initial, shared = true) {
             if (mounted && inserted) setValue(inserted);
           }
         } else if (key === STORAGE_KEYS.ACCOUNTS) {
-          const { data, error } = await supabase.from("profiles").select("*");
-          if (error) throw error;
-          if (mounted && data) setValue(data.map(normalizeProfileRow));
+          const stored = localStorage.getItem(key);
+          const localAccounts = stored ? JSON.parse(stored) : [];
+          try {
+            const { data, error } = await supabase.from("profiles").select("*");
+            if (error) throw error;
+            if (mounted && data) {
+              const remoteAccounts = data.map(normalizeProfileRow);
+              const merged = remoteAccounts.slice();
+              localAccounts.forEach((item) => {
+                if (!remoteAccounts.some((r) => r.id === item.id || (item.email && item.email === r.email))) {
+                  merged.push(item);
+                }
+              });
+              setValue(merged);
+              if (mounted) setLoaded(true);
+              return;
+            }
+          } catch (e) {
+            console.warn("No se pudo leer public.profiles, usando localStorage:", e.message);
+          }
+          if (mounted) setValue(localAccounts);
         } else if (shared && SUPABASE_STORE_KEYS.has(key)) {
           const { data, error } = await supabase.from("app_store").select("value").eq("key", key).maybeSingle();
           if (error) throw error;
@@ -277,9 +299,18 @@ function useStore(key, initial, shared = true) {
           if (error) throw error;
         }
       } else if (key === STORAGE_KEYS.ACCOUNTS) {
-        const profiles = next.map((item) => profileToDb(item));
-        const { error } = await supabase.from("profiles").upsert(profiles);
-        if (error) throw error;
+        localStorage.setItem(key, JSON.stringify(next));
+        const supabaseAccounts = next.filter((item) => item.email && item.email.trim() && !item.localOnly);
+        if (supabaseAccounts.length > 0) {
+          try {
+            const profiles = supabaseAccounts.map((item) => profileToDb(item));
+            const { error } = await supabase.from("profiles").upsert(profiles);
+            if (error) throw error;
+          } catch (e) {
+            console.warn("No se pudo guardar en public.profiles, usando localStorage:", e.message);
+          }
+        }
+        return;
       } else {
         if (shared && SUPABASE_STORE_KEYS.has(key)) {
           const { error } = await supabase.from("app_store").upsert({ key, value: next });
@@ -572,6 +603,23 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const formatAuthError = (error) => {
+    const message = typeof error === "string" ? error : error?.message || "Error de autenticación.";
+    const lower = message.toLowerCase();
+    if (lower.includes("rate limit")) {
+      return "Se alcanzó el límite de envío de correo. Usa Iniciar sesión si ya tienes cuenta o espera unos minutos.";
+    }
+    if (lower.includes("already registered") || lower.includes("user already exists") || lower.includes("duplicate") || lower.includes("already been used")) {
+      return "Ese correo ya está registrado. Usa Iniciar sesión en lugar de crear una cuenta.";
+    }
+    return message;
+  };
+
+  const existingEmailError = (message) => {
+    const lower = String(message || "").toLowerCase();
+    return lower.includes("already registered") || lower.includes("user already exists") || lower.includes("duplicate") || lower.includes("already been used") || lower.includes("email rate limit");
+  };
+
   const TYPE_LABELS = {
     member: "Miembro",
     missionary: "Misionero",
@@ -581,8 +629,24 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
 
   const handleRegister = async () => {
     setError("");
-    if (!name || !email || !password) { setError("Completa nombre, correo y contraseña."); return; }
-    if (accounts.find((a) => a.email === email)) { setError("Ya existe una cuenta con ese correo."); return; }
+    const isLocal = !email?.trim();
+    if (!name || !password) { setError("Completa nombre y contraseña."); return; }
+    if (!isLocal && accounts.find((a) => a.email?.toLowerCase() === email.toLowerCase())) {
+      setError("Ese correo ya está registrado. Usa Iniciar sesión en lugar de crear una cuenta.");
+      return;
+    }
+
+    if (!isLocal) {
+      try {
+        const { data: existingProfile, error: profileError } = await supabase.from("profiles").select("id").eq("email", email).maybeSingle();
+        if (!profileError && existingProfile) {
+          setError("Ese correo ya está registrado. Usa Iniciar sesión en lugar de crear una cuenta.");
+          return;
+        }
+      } catch (e) {
+        console.warn("No se pudo verificar si el correo existe:", e.message);
+      }
+    }
 
     if (accountType === "admin") {
       if (!code) { setError("Ingresa el código de invitación de una rama ya aceptada en la red."); return; }
@@ -593,16 +657,26 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         return;
       }
       const account = {
-        id: uid(), name, email, password, branchId: null, role: "admin",
+        id: uid(), name, email: isLocal ? "" : email, password: null,
+        localOnly: isLocal, localPassword: isLocal ? password : null,
+        branchId: null, role: "admin",
         invitedByBranchId: adminCode.issuerBranchId || null,
         active: true,
         createdAt: new Date().toISOString(),
       };
       try {
         setSubmitting(true);
+        if (isLocal) {
+          setAccounts([...accounts, account]);
+          setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: account.email || "local" } : c)));
+          localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(account));
+          onLogin(account);
+          return;
+        }
+
         const { data, error } = await supabase.auth.signUp({
           email: account.email,
-          password: account.password,
+          password: password,
           options: {
             data: {
               name: account.name,
@@ -639,7 +713,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         }
       } catch (e) {
         console.warn("Supabase Auth registro (admin):", e.message);
-        setError(e.message || "Error al crear cuenta de administrador.");
+        setError(formatAuthError(e));
       } finally {
         setSubmitting(false);
       }
@@ -650,15 +724,23 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       const branch = branches.find((b) => b.id === visitorBranchId && b.status === "approved");
       if (!branch) { setError("Selecciona la rama que deseas observar."); return; }
       const account = {
-        id: uid(), name, email, password, branchId: branch.id, role: "visitor",
+        id: uid(), name, email: isLocal ? "" : email, password: null,
+        localOnly: isLocal, localPassword: isLocal ? password : null,
+        branchId: branch.id, role: "visitor",
         active: true, expiresAt: addMonths(new Date(), 3).toISOString(),
         createdAt: new Date().toISOString(),
       };
       try {
         setSubmitting(true);
+        if (isLocal) {
+          setAccounts([...accounts, account]);
+          localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(account));
+          onLogin(account);
+          return;
+        }
         const { data, error } = await supabase.auth.signUp({
           email: account.email,
-          password: account.password,
+          password: password,
           options: {
             data: {
               name: account.name,
@@ -692,7 +774,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         }
       } catch (e) {
         console.warn("Supabase Auth registro (visitor):", e.message);
-        setError(e.message || "Error al crear cuenta de visitante.");
+        setError(formatAuthError(e));
       } finally {
         setSubmitting(false);
       }
@@ -712,7 +794,8 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       return;
     }
     const account = {
-      id: uid(), name, email, password, branchId: branch.id,
+      id: uid(), name, email: isLocal ? "" : email, password: null, localOnly: isLocal,
+      localPassword: isLocal ? password : null, branchId: branch.id,
       role: accountType === "missionary" ? "missionary" : accountType === "visitor" ? "visitor" : "member",
       active: true,
       expiresAt: accountType === "visitor" ? addMonths(new Date(), 3).toISOString() : null,
@@ -720,9 +803,15 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
     };
     try {
       setSubmitting(true);
+      if (isLocal) {
+        setAccounts([...accounts, account]);
+        localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(account));
+        onLogin(account);
+        return;
+      }
       const { data, error } = await supabase.auth.signUp({
         email: account.email,
-        password: account.password,
+        password: password,
         options: {
           data: {
             name: account.name,
@@ -756,7 +845,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       }
     } catch (e) {
       console.warn("Supabase Auth registro:", e.message);
-      setError(e.message || "Error al crear cuenta de usuario.");
+      setError(formatAuthError(e));
     } finally {
       setSubmitting(false);
     }
@@ -765,23 +854,46 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
   const handleLogin = async () => {
     setError("");
     setSubmitting(true);
+    const tryLocalLogin = () => {
+      const account = accounts.find((a) => a.localOnly && a.localPassword === password && (email ? a.email?.toLowerCase() === email.toLowerCase() : !a.email));
+      if (account) {
+        onLogin(account);
+        localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(account));
+        return true;
+      }
+      return false;
+    };
+
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      const authUser = data.user || data.session?.user;
-      if (!authUser) { setError("No se pudo iniciar sesión."); return; }
-      const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
-      if (profileError) throw profileError;
-      if (!profile) {
-        setError("No se encontró el perfil asociado a esta cuenta.");
+      if (!email?.trim()) {
+        if (tryLocalLogin()) return;
+        setError("Ingresa tu contraseña para la cuenta local.");
         return;
       }
-      const persisted = accounts.find((a) => a.id === profile.id);
-      if (!persisted) setAccounts([...accounts, profile]);
-      onLogin(profile);
-    } catch (e) {
-      console.warn("Supabase Auth login:", e.message);
-      setError(e.message || "Correo o contraseña incorrectos.");
+
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (!error && data) {
+          const authUser = data.user || data.session?.user;
+          if (authUser) {
+            const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
+            if (profileError) throw profileError;
+            if (!profile) {
+              setError("No se encontró el perfil asociado a esta cuenta.");
+              return;
+            }
+            const persisted = accounts.find((a) => a.id === profile.id);
+            if (!persisted) setAccounts([...accounts, profile]);
+            onLogin(profile);
+            return;
+          }
+        }
+      } catch (remoteError) {
+        console.warn("Supabase Auth login falló, probando local:", remoteError.message);
+      }
+
+      if (tryLocalLogin()) return;
+      setError("Correo o contraseña incorrectos.");
     } finally {
       setSubmitting(false);
     }
@@ -823,6 +935,11 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           <input placeholder="Nombre completo" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
         )}
         <input placeholder="Correo electrónico" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
+        {mode === "register" && (
+          <div style={{ fontSize: 11, color: "#6a6a6a", marginTop: -2, marginBottom: 10 }}>
+            Deja el correo vacío para crear una cuenta local sin usar Supabase.
+          </div>
+        )}
         <input type="password" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
         {mode === "register" && accountType === "visitor" && (
           <select value={visitorBranchId} onChange={(e) => setVisitorBranchId(e.target.value)} style={inputStyle}>
@@ -2403,6 +2520,16 @@ export default function App() {
       return null;
     };
 
+    const restoreLocalSession = () => {
+      const stored = localStorage.getItem(STORAGE_KEYS.SESSION);
+      if (!stored) return null;
+      try {
+        return JSON.parse(stored);
+      } catch {
+        return null;
+      }
+    };
+
     const restoreAuthSession = async () => {
       try {
         const { data, error } = await supabase.auth.getSession();
@@ -2416,11 +2543,19 @@ export default function App() {
           const restored = await normalizeSession(sessionObj);
           if (mounted && restored) setSession(restored);
         } else {
-          if (mounted) setSession(null);
+          const localSession = restoreLocalSession();
+          if (mounted && localSession) {
+            setSession(localSession);
+          } else if (mounted) {
+            setSession(null);
+          }
         }
       } catch (e) {
         console.warn("Error al restaurar sesión Supabase:", e.message);
-        if (mounted) setSession(null);
+        if (mounted) {
+          const localSession = restoreLocalSession();
+          setSession(localSession);
+        }
       } finally {
         if (mounted) setAuthChecked(true);
       }
@@ -2528,6 +2663,7 @@ export default function App() {
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_CSS }} />
       <Header view={view} setView={setView} session={session} onLogout={async () => {
         await supabase.auth.signOut();
+        localStorage.removeItem(STORAGE_KEYS.SESSION);
         setSession(null);
         setView("directory");
       }}

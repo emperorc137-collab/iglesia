@@ -3,7 +3,7 @@ import {
   MapPin, Search, Calendar, Mic, Shield, Plus, X, Check, ChevronLeft, ChevronRight,
   Trees, Users, Clock, ArrowLeft, MessageCircle, Image as ImageIcon, Droplet,
   Key, LogIn, LogOut, Send, Upload, UserCircle, Copy, Trash2, AlertCircle,
-  Compass, Pencil, Server, Network, ExternalLink, Globe, Download, Lock,
+  Compass, Pencil, Network, ExternalLink, Globe, Download, Lock,
   BookOpen, GitBranch, Cake, ArrowRightLeft, Filter, ShieldCheck, History,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
@@ -480,7 +480,6 @@ function ManifestoView() {
     { icon: GitBranch, title: "Cada rama es dueña de su copia", body: "Todas las ramas corren el mismo código base, pero cada una aloja su propia copia en su propio dominio." },
     { icon: Network, title: "Conectadas por invitación", body: "Una rama nueva se une porque el administrador de una rama existente le entrega un código de invitación." },
     { icon: ShieldCheck, title: "Verificación central", body: "Un servidor central valida la API key y el código de invitación de cada rama antes de que aparezca en el directorio público." },
-    { icon: Server, title: "Servidor propio o compartido", body: "Cada rama puede alojar sus propios datos o usar el servidor de otra rama de confianza." },
     { icon: Download, title: "Tus datos son tuyos", body: "Desde el panel de administración puedes exportar todos tus datos en JSON en cualquier momento." },
   ];
   return (
@@ -875,9 +874,6 @@ function DirectoryView({ branches, onOpenBranch, onGoJoin, session }) {
             </select>
           </div>
         )}
-        {!session && <button onClick={onGoJoin} className="btn-primary" style={{ ...primaryBtn, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-          <Plus size={15} /> Unirme
-        </button>}
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
@@ -911,9 +907,6 @@ function DirectoryView({ branches, onOpenBranch, onGoJoin, session }) {
               </div>
             </div>
             <div style={{ marginTop: 10, fontSize: 12, color: "#767670" }}>{b.district} · {b.meetingTime}</div>
-            <div style={{ marginTop: 6, fontSize: 11, color: "#9a9a92", display: "flex", alignItems: "center", gap: 4 }}>
-              <Server size={11} /> {b.serverBranchId ? `Servidor: ${branches.find((x) => x.id === b.serverBranchId)?.name || "otra rama"}` : "Servidor propio"}
-            </div>
             <div style={{ marginTop: 3, fontSize: 11, color: b.siteUrl ? "#1f5c3f" : "#9a9a92", display: "flex", alignItems: "center", gap: 4 }}>
               {b.siteUrl ? <><ExternalLink size={11} /> Abre en su propio sitio</> : <><Globe size={11} /> Usa este directorio compartido</>}
             </div>
@@ -995,16 +988,6 @@ function RequestBranchModal({ onClose, onSubmit, otherBranches }) {
               placeholder="https://mi-rama.ejemplo.org" style={inputStyle} />
           </div>
 
-          <div>
-            <div style={{ fontSize: 12, color: "#767670", marginBottom: 4 }}>¿Dónde se alojará el servidor de tu rama?</div>
-            <select value={form.serverBranchId} onChange={(e) => setForm({ ...form, serverBranchId: e.target.value })} style={inputStyle}>
-              <option value="">Servidor propio de mi rama</option>
-              {otherBranches.map((b) => (
-                <option key={b.id} value={b.id}>Usar el servidor de: {b.name}</option>
-              ))}
-            </select>
-          </div>
-
           {geoError && <div style={{ fontSize: 12, color: "#a33" }}>{geoError}</div>}
           <button onClick={handleSubmit} disabled={geocoding} className="btn-primary" style={{ ...primaryBtn, marginTop: 6, opacity: geocoding ? 0.6 : 1 }}>
             {geocoding ? "Ubicando dirección..." : "Registrar rama"}
@@ -1044,7 +1027,6 @@ function BranchDetail({ branch, branches, events, ordinances, onBack, primaryBra
       <div style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 16, marginBottom: 20, fontSize: 13, color: "#334033" }}>
         <div style={{ marginBottom: 6 }}><b style={{ fontWeight: 500 }}>Horario:</b> {branch.meetingTime}</div>
         <div style={{ marginBottom: 6 }}><b style={{ fontWeight: 500 }}>Dirección:</b> {branch.address}</div>
-        <div style={{ marginBottom: 6 }}><b style={{ fontWeight: 500 }}>Servidor:</b> {serverBranch ? `alojado por ${serverBranch.name}` : "propio"}</div>
         <div style={{ marginBottom: branch.siteUrl ? 6 : 0 }}><b style={{ fontWeight: 500 }}>Invitada por:</b> {parentBranch ? parentBranch.name : "rama fundadora"}</div>
         {branch.siteUrl && (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2422,16 +2404,26 @@ export default function App() {
     };
 
     const restoreAuthSession = async () => {
-      const { data, error } = await supabase.auth.getSession();
-      if (!mounted) return;
-      if (error) {
-        console.warn("No se pudo restaurar sesión Supabase:", error.message);
-      }
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (!mounted) return;
+        if (error) {
+          console.warn("No se pudo restaurar sesión Supabase:", error.message);
+        }
 
-      const sessionObj = data?.session ?? data;
-      const restored = await normalizeSession(sessionObj);
-      if (restored) setSession(restored);
-      setAuthChecked(true);
+        const sessionObj = data?.session ?? data;
+        if (sessionObj?.user) {
+          const restored = await normalizeSession(sessionObj);
+          if (mounted && restored) setSession(restored);
+        } else {
+          if (mounted) setSession(null);
+        }
+      } catch (e) {
+        console.warn("Error al restaurar sesión Supabase:", e.message);
+        if (mounted) setSession(null);
+      } finally {
+        if (mounted) setAuthChecked(true);
+      }
     };
 
     restoreAuthSession();

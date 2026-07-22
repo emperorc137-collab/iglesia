@@ -27,9 +27,31 @@ const STORAGE_KEYS = {
 
 const SUPABASE_STORE_KEYS = new Set([
   STORAGE_KEYS.EVENTS, STORAGE_KEYS.SPEAKERS, STORAGE_KEYS.ORDINANCES, STORAGE_KEYS.MEMBERS,
-  STORAGE_KEYS.PHOTOS, STORAGE_KEYS.MESSAGES, STORAGE_KEYS.ACCOUNTS, STORAGE_KEYS.MISSIONARIES,
+  STORAGE_KEYS.PHOTOS, STORAGE_KEYS.MESSAGES, STORAGE_KEYS.MISSIONARIES,
   STORAGE_KEYS.COMPANIONSHIPS, STORAGE_KEYS.ADMIN_CODES, STORAGE_KEYS.BRANCH_CREDENTIALS,
 ]);
+
+const PROFILE_FIELDS = ['id', 'email', 'name', 'role', 'branch_id', 'invited_by_branch_id', 'active', 'expires_at', 'created_at'];
+
+function normalizeProfileRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    branchId: row.branch_id ?? row.branchId ?? null,
+    invitedByBranchId: row.invited_by_branch_id ?? row.invitedByBranchId ?? null,
+    expiresAt: row.expires_at ?? row.expiresAt ?? null,
+    createdAt: row.created_at ?? row.createdAt ?? null,
+  };
+}
+
+function profileToDb(profile) {
+  const row = { ...profile };
+  if (row.branchId !== undefined) { row.branch_id = row.branchId; delete row.branchId; }
+  if (row.invitedByBranchId !== undefined) { row.invited_by_branch_id = row.invitedByBranchId; delete row.invitedByBranchId; }
+  if (row.expiresAt !== undefined) { row.expires_at = row.expiresAt; delete row.expiresAt; }
+  if (row.createdAt !== undefined) { row.created_at = row.createdAt; delete row.createdAt; }
+  return row;
+}
 
 const LEADERSHIP_ROLES = ["Presidente de Rama", "Primer Consejero", "Segundo Consejero", "Secretario de Rama"];
 function hasLeadershipRole(session, members) {
@@ -109,6 +131,25 @@ function monthsSince(dateStr) {
 }
 function isActiveSession(session) {
   return !!session && session.active !== false;
+}
+
+function authSessionToAccount(authSession, accounts = []) {
+  if (!authSession?.user) return null;
+  const user = authSession.user;
+  const metadata = user.user_metadata || {};
+  const existing = accounts.find((a) => a.email === user.email || a.id === user.id);
+  return {
+    id: existing?.id || user.id,
+    authUserId: user.id,
+    name: metadata.name || existing?.name || user.email,
+    email: user.email,
+    role: metadata.role || existing?.role || "member",
+    branchId: metadata.branchId || existing?.branchId || null,
+    invitedByBranchId: metadata.invitedByBranchId || existing?.invitedByBranchId || null,
+    active: metadata.active !== false && (existing?.active !== false),
+    expiresAt: metadata.expiresAt || existing?.expiresAt || null,
+    createdAt: metadata.createdAt || existing?.createdAt || new Date().toISOString(),
+  };
 }
 
 /* ---------- API central ---------- */
@@ -198,6 +239,10 @@ function useStore(key, initial, shared = true) {
               if (insertError) throw insertError;
             if (mounted && inserted) setValue(inserted);
           }
+        } else if (key === STORAGE_KEYS.ACCOUNTS) {
+          const { data, error } = await supabase.from("profiles").select("*");
+          if (error) throw error;
+          if (mounted && data) setValue(data.map(normalizeProfileRow));
         } else if (shared && SUPABASE_STORE_KEYS.has(key)) {
           const { data, error } = await supabase.from("app_store").select("value").eq("key", key).maybeSingle();
           if (error) throw error;
@@ -231,6 +276,10 @@ function useStore(key, initial, shared = true) {
             .upsert(filtered);
           if (error) throw error;
         }
+      } else if (key === STORAGE_KEYS.ACCOUNTS) {
+        const profiles = next.map((item) => profileToDb(item));
+        const { error } = await supabase.from("profiles").upsert(profiles);
+        if (error) throw error;
       } else {
         if (shared && SUPABASE_STORE_KEYS.has(key)) {
           const { error } = await supabase.from("app_store").upsert({ key, value: next });
@@ -522,6 +571,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
   const [code, setCode] = useState("");
   const [visitorBranchId, setVisitorBranchId] = useState(branches.find((b) => b.status === "approved")?.id || "");
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   const TYPE_LABELS = {
     member: "Miembro",
@@ -530,7 +580,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
     admin: "Admin de nueva rama",
   };
 
-  const handleRegister = () => {
+  const handleRegister = async () => {
     setError("");
     if (!name || !email || !password) { setError("Completa nombre, correo y contraseña."); return; }
     if (accounts.find((a) => a.email === email)) { setError("Ya existe una cuenta con ese correo."); return; }
@@ -546,11 +596,54 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       const account = {
         id: uid(), name, email, password, branchId: null, role: "admin",
         invitedByBranchId: adminCode.issuerBranchId || null,
+        active: true,
         createdAt: new Date().toISOString(),
       };
-      setAccounts([...accounts, account]);
-      setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: email } : c)));
-      onLogin(account);
+      try {
+        setSubmitting(true);
+        const { data, error } = await supabase.auth.signUp({
+          email: account.email,
+          password: account.password,
+          options: {
+            data: {
+              name: account.name,
+              role: account.role,
+              branchId: account.branchId,
+              invitedByBranchId: account.invitedByBranchId,
+              active: account.active,
+              expiresAt: account.expiresAt,
+              createdAt: account.createdAt,
+            },
+          },
+        });
+        if (error) throw error;
+        const authAccount = { ...account, id: data.user?.id || account.id, password: null };
+        const profileRow = {
+          id: data.user?.id || account.id,
+          email: authAccount.email,
+          name: authAccount.name,
+          role: authAccount.role,
+          branchId: authAccount.branchId,
+          invitedByBranchId: authAccount.invitedByBranchId,
+          active: authAccount.active,
+          expiresAt: authAccount.expiresAt,
+          createdAt: authAccount.createdAt,
+        };
+        const { error: profileError } = await supabase.from("profiles").upsert([profileRow]);
+        if (profileError) throw profileError;
+        setAccounts([...accounts, profileRow]);
+        setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: email } : c)));
+        if (data.session) {
+          onLogin(profileRow);
+        } else {
+          setError("Cuenta creada. Revisa tu correo para confirmar el acceso si es necesario.");
+        }
+      } catch (e) {
+        console.warn("Supabase Auth registro (admin):", e.message);
+        setError(e.message || "Error al crear cuenta de administrador.");
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
 
@@ -562,8 +655,48 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         active: true, expiresAt: addMonths(new Date(), 3).toISOString(),
         createdAt: new Date().toISOString(),
       };
-      setAccounts([...accounts, account]);
-      onLogin(account);
+      try {
+        setSubmitting(true);
+        const { data, error } = await supabase.auth.signUp({
+          email: account.email,
+          password: account.password,
+          options: {
+            data: {
+              name: account.name,
+              role: account.role,
+              branchId: account.branchId,
+              active: account.active,
+              expiresAt: account.expiresAt,
+              createdAt: account.createdAt,
+            },
+          },
+        });
+        if (error) throw error;
+        const profileRow = {
+          id: data.user?.id || account.id,
+          email: account.email,
+          name: account.name,
+          role: account.role,
+          branchId: account.branchId,
+          invitedByBranchId: account.invitedByBranchId,
+          active: account.active,
+          expiresAt: account.expiresAt,
+          createdAt: account.createdAt,
+        };
+        const { error: profileError } = await supabase.from("profiles").upsert([profileRow]);
+        if (profileError) throw profileError;
+        setAccounts([...accounts, profileRow]);
+        if (data.session) {
+          onLogin(profileRow);
+        } else {
+          setError("Cuenta creada. Revisa tu correo para confirmar el acceso si es necesario.");
+        }
+      } catch (e) {
+        console.warn("Supabase Auth registro (visitor):", e.message);
+        setError(e.message || "Error al crear cuenta de visitante.");
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
 
@@ -586,19 +719,73 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       expiresAt: accountType === "visitor" ? addMonths(new Date(), 3).toISOString() : null,
       createdAt: new Date().toISOString(),
     };
-    setAccounts([...accounts, account]);
-    onLogin(account);
+    try {
+      setSubmitting(true);
+      const { data, error } = await supabase.auth.signUp({
+        email: account.email,
+        password: account.password,
+        options: {
+          data: {
+            name: account.name,
+            role: account.role,
+            branchId: account.branchId,
+            active: account.active,
+            expiresAt: account.expiresAt,
+            createdAt: account.createdAt,
+          },
+        },
+      });
+      if (error) throw error;
+      const profileRow = profileToDb({
+        id: data.user?.id || account.id,
+        email: account.email,
+        name: account.name,
+        role: account.role,
+        branchId: account.branchId,
+        invitedByBranchId: account.invitedByBranchId,
+        active: account.active,
+        expiresAt: account.expiresAt,
+        createdAt: account.createdAt,
+      });
+      const { error: profileError } = await supabase.from("profiles").upsert([profileRow]);
+      if (profileError) throw profileError;
+      setAccounts([...accounts, profileRow]);
+      if (data.session) {
+        onLogin(profileRow);
+      } else {
+        setError("Cuenta creada. Revisa tu correo para confirmar el acceso si es necesario.");
+      }
+    } catch (e) {
+      console.warn("Supabase Auth registro:", e.message);
+      setError(e.message || "Error al crear cuenta de usuario.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setError("");
-    const acc = accounts.find((a) => a.email === email && a.password === password);
-    if (!acc) { setError("Correo o contraseña incorrectos."); return; }
-    if (acc.role === "visitor" && acc.expiresAt && new Date(acc.expiresAt) < new Date()) {
-      setError("Tu acceso temporal de visitante venció.");
-      return;
+    setSubmitting(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      const authUser = data.user || data.session?.user;
+      if (!authUser) { setError("No se pudo iniciar sesión."); return; }
+      const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
+      if (profileError) throw profileError;
+      if (!profile) {
+        setError("No se encontró el perfil asociado a esta cuenta.");
+        return;
+      }
+      const persisted = accounts.find((a) => a.id === profile.id);
+      if (!persisted) setAccounts([...accounts, profile]);
+      onLogin(profile);
+    } catch (e) {
+      console.warn("Supabase Auth login:", e.message);
+      setError(e.message || "Correo o contraseña incorrectos.");
+    } finally {
+      setSubmitting(false);
     }
-    onLogin(acc);
   };
 
   return (
@@ -652,8 +839,8 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
             <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
           </div>
         )}
-        <button onClick={mode === "login" ? handleLogin : handleRegister} className="btn-primary" style={primaryBtn}>
-          {mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
+        <button onClick={mode === "login" ? handleLogin : handleRegister} className="btn-primary" style={primaryBtn} disabled={submitting}>
+          {submitting ? "Procesando…" : mode === "login" ? "Iniciar sesión" : "Crear cuenta"}
         </button>
       </div>
     </div>
@@ -2198,22 +2385,75 @@ export default function App() {
   const [view, setView] = useState("directory");
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const accountsRef = useRef(accounts);
+
+  useEffect(() => {
+    accountsRef.current = accounts;
+  }, [accounts]);
 
   useEffect(() => {
     if (!accountsLoaded) return;
-    if (accounts.length === 0) {
-      setAccounts([{
-        id: "seed-admin", name: "Admin fundador", email: SEED_ADMIN_CREDENTIALS.email,
-        password: SEED_ADMIN_CREDENTIALS.password, role: "admin", branchId: null, active: true,
-        invitedByBranchId: null, createdAt: new Date().toISOString(),
-      }]);
-    }
+    let mounted = true;
+
+    const restoreAuthSession = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (error) {
+        console.warn("No se pudo restaurar sesión Supabase:", error.message);
+      }
+      const authUser = data?.session?.user;
+      if (authUser) {
+        const { data: profile, error: profileError } = await supabase.from("profiles").select("*").eq("id", authUser.id).maybeSingle();
+        if (profileError) {
+          console.warn("No se pudo leer el perfil de Supabase:", profileError.message);
+        }
+        if (profile) {
+          const normalized = normalizeProfileRow(profile);
+          const persisted = accountsRef.current.find((a) => a.id === normalized.id);
+          if (!persisted) setAccounts([...accountsRef.current, normalized]);
+          setSession(normalized);
+        } else {
+          const authAccount = authSessionToAccount(data.session, accountsRef.current);
+          if (authAccount) {
+            setAccounts([...accountsRef.current, authAccount]);
+            setSession(authAccount);
+          }
+        }
+      }
+      setAuthChecked(true);
+    };
+
+    restoreAuthSession();
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, sessionData) => {
+      if (!mounted) return;
+      const authUser = sessionData?.user;
+      if (authUser) {
+        const profile = accountsRef.current.find((a) => a.id === authUser.id);
+        if (profile) {
+          setSession(profile);
+        } else {
+          const authAccount = authSessionToAccount(sessionData, accountsRef.current);
+          if (authAccount) {
+            setAccounts([...accountsRef.current, authAccount]);
+            setSession(authAccount);
+          }
+        }
+      } else {
+        setSession(null);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      listener?.subscription?.unsubscribe?.();
+    };
   }, [accountsLoaded]);
 
   useEffect(() => {
     if (!branchesLoaded) return;
     if (branches.length === 0) {
-      const b = { ...seedBranch, adminId: "seed-admin" };
+      const b = { ...seedBranch, adminId: null };
       b.inviteCode = genInviteCode(b.name);
       b.missionaryCode = genMissionaryCode(b.name);
       b.visitorCode = genVisitorCode(b.name);
@@ -2236,8 +2476,7 @@ export default function App() {
       if (b.siteUrl === undefined) { patch.siteUrl = ""; changed = true; }
       if (b.status === undefined) { patch.status = "approved"; changed = true; }
       if (b.verification === undefined) { patch.verification = b.id === seedBranch.id ? "verified" : "pending"; changed = true; }
-      if (b.id === seedBranch.id && !b.adminId) { patch.adminId = "seed-admin"; changed = true; }
-      else if (b.adminId === undefined) { patch.adminId = null; changed = true; }
+      if (b.adminId === undefined) { patch.adminId = null; changed = true; }
       return Object.keys(patch).length ? { ...b, ...patch } : b;
     });
     if (changed) setBranches(next);
@@ -2280,7 +2519,11 @@ export default function App() {
   return (
     <div style={{ fontFamily: "system-ui, -apple-system, sans-serif", background: "#f7f7f5", minHeight: "100%" }}>
       <style dangerouslySetInnerHTML={{ __html: GLOBAL_CSS }} />
-      <Header view={view} setView={setView} session={session} onLogout={() => { setSession(null); setView("directory"); }}
+      <Header view={view} setView={setView} session={session} onLogout={async () => {
+        await supabase.auth.signOut();
+        setSession(null);
+        setView("directory");
+      }}
         chatUnread={chatUnread} speakerGaps={speakerGaps} />
 
       {view === "login" && (

@@ -24,15 +24,18 @@ const STORAGE_KEYS = {
   COMPANIONSHIPS: "companionships",
   ADMIN_CODES: "admin_codes",
   BRANCH_CREDENTIALS: "branch_credentials",
+  WELCOME_PAGE: "welcome_page",
+  ROLES: "roles",
 };
 
 const SUPABASE_STORE_KEYS = new Set([
   STORAGE_KEYS.EVENTS, STORAGE_KEYS.SPEAKERS, STORAGE_KEYS.ORDINANCES, STORAGE_KEYS.MEMBERS,
   STORAGE_KEYS.PHOTOS, STORAGE_KEYS.MESSAGES, STORAGE_KEYS.MISSIONARIES,
   STORAGE_KEYS.COMPANIONSHIPS, STORAGE_KEYS.ADMIN_CODES, STORAGE_KEYS.BRANCH_CREDENTIALS,
+  STORAGE_KEYS.WELCOME_PAGE, STORAGE_KEYS.ROLES,
 ]);
 
-const PROFILE_FIELDS = ['id', 'email', 'name', 'role', 'branch_id', 'invited_by_branch_id', 'active', 'expires_at', 'created_at'];
+const PROFILE_FIELDS = ['id', 'email', 'username', 'phone', 'name', 'role', 'branch_id', 'invited_by_branch_id', 'active', 'expires_at', 'created_at'];
 
 function normalizeProfileRow(row) {
   if (!row) return row;
@@ -94,6 +97,12 @@ const CHURCH_ROLES = [
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
+}
+function normalizePhone(value) {
+  return String(value || "").replace(/[^0-9]/g, "");
+}
+function isEmailValue(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
 function secureCode(length = 6) {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -502,7 +511,7 @@ function MapLegend() {
         <span style={{ width: 18, height: 0, borderTop: "2px dashed #1f5c3f" }} /> Invitación
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ width: 18, height: 0, borderTop: "2px dotted #0c447c" }} /> Servidor compartido
+        <span style={{ width: 18, height: 0, borderTop: "2px dotted #0c447c" }} /> Directorio público
       </div>
     </div>
   );
@@ -536,19 +545,78 @@ function ManifestoView() {
   );
 }
 
+function WelcomeView({ welcomePage, photos, onExplore, onLogin }) {
+  const approvedPhotos = photos.filter((p) => p.status === "approved");
+  const featured = useMemo(() => {
+    if (welcomePage?.featuredPhoto) return welcomePage.featuredPhoto;
+    if (approvedPhotos.length === 0) return null;
+    return approvedPhotos[Math.floor(Math.random() * approvedPhotos.length)].dataUrl;
+  }, [approvedPhotos.length, welcomePage?.featuredPhoto]);
+
+  const [selectedZone, setSelectedZone] = useState("A");
+  const address = welcomePage?.address || "Calle 12 #34-56, Sincelejo, Sucre";
+  return (
+    <div className="container-page" style={{ padding: 24, maxWidth: 860, margin: "0 auto", minHeight: "calc(100vh - 80px)" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.9fr", gap: 24, alignItems: "start" }}>
+        <div>
+          <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1.05, marginBottom: 16, color: "#143a30" }}>{welcomePage?.title || "Bienvenidos a la Red de Ramas"}</div>
+          <div style={{ fontSize: 16, color: "#334033", marginBottom: 16 }}>{welcomePage?.subtitle || "Una comunidad de ramas autosuficientes y conectadas."}</div>
+          <div style={{ fontSize: 14, color: "#4f594f", lineHeight: 1.75, marginBottom: 24 }}>{welcomePage?.body || "Coordina eventos, comparte fotos y administra tu rama local con herramientas modernas sin dejar de ser independiente."}</div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
+            <button onClick={onExplore} className="btn-primary" style={primaryBtn}>Ver directorio</button>
+            <button onClick={onLogin} className="btn-secondary" style={secondaryBtn}>Iniciar sesión</button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 8 }}>
+            {[["A", welcomePage?.missionariesA], ["B", welcomePage?.missionariesB]].map(([zone, text]) => (
+              <button key={zone} onClick={() => setSelectedZone(zone)} style={{
+                borderRadius: 14, padding: 16, textAlign: "left", border: selectedZone === zone ? "2px solid #1f5c3f" : "1px solid #e4e4e0",
+                background: selectedZone === zone ? "#eaf4ea" : "#fff", color: "#1f3431", cursor: "pointer",
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Misioneros {zone}</div>
+                <div style={{ fontSize: 13, color: "#4f594f" }}>{text || `No hay información de misioneros ${zone} disponible aún.`}</div>
+              </button>
+            ))}
+          </div>
+          <div style={{ marginTop: 18, border: "1px solid #e4e4e0", borderRadius: 14, padding: 16, background: "#fff" }}>
+            <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 10 }}>Zona seleccionada: Misioneros {selectedZone}</div>
+            <div style={{ fontSize: 12, color: "#767670", marginBottom: 12 }}>Dirección de la rama en Sincelejo</div>
+            <div style={{ fontSize: 14, color: "#334033", lineHeight: 1.6 }}>{address}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 14 }}>
+              <div style={{ borderRadius: 12, padding: 12, background: selectedZone === "A" ? "#eaf4ea" : "#f7f7f5" }}>
+                <div style={{ fontSize: 11, color: "#767670", marginBottom: 6 }}>Misioneros A</div>
+                <div style={{ fontSize: 13 }}>{welcomePage?.missionariesA || "No asignado"}</div>
+              </div>
+              <div style={{ borderRadius: 12, padding: 12, background: selectedZone === "B" ? "#eaf4ea" : "#f7f7f5" }}>
+                <div style={{ fontSize: 11, color: "#767670", marginBottom: 6 }}>Misioneros B</div>
+                <div style={{ fontSize: 13 }}>{welcomePage?.missionariesB || "No asignado"}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{ borderRadius: 20, overflow: "hidden", minHeight: 360, background: "#eef6f0", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          {featured ? <img src={featured} alt="Bienvenida" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <BranchSymbol size={140} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps = 0 }) {
   const tabs = [
+    { id: "welcome", label: "Inicio", icon: BookOpen },
     { id: "directory", label: "Directorio", icon: MapPin },
-    { id: "red", label: "La Red", icon: BookOpen },
+    { id: "red", label: "La Red", icon: Network },
     { id: "calendar", label: "Calendario", icon: Calendar },
-    { id: "ordinances", label: "Ordenanzas", icon: Droplet },
     { id: "speakers", label: "Discursos", icon: Mic, badge: speakerGaps },
     { id: "members", label: "Miembros", icon: Users },
     { id: "missionaries", label: "Misioneros", icon: Compass },
     { id: "photos", label: "Fotos", icon: ImageIcon },
     { id: "chat", label: "Chat", icon: MessageCircle, badge: chatUnread },
-    { id: "admin", label: "Admin", icon: Shield },
   ];
+  if (session?.role === "admin") {
+    tabs.push({ id: "admin", label: "Admin", icon: Shield });
+  }
+
   return (
     <div className="app-header" style={{
       display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -599,7 +667,10 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
   const [accountType, setAccountType] = useState("member");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [code, setCode] = useState("");
   const [visitorBranchId, setVisitorBranchId] = useState(branches.find((b) => b.status === "approved")?.id || "");
@@ -630,18 +701,47 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
     admin: "Admin de nueva rama",
   };
 
+  const normalizePhone = (value) => String(value || "").replace(/[^\d]/g, "");
+  const isEmailValue = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+
   const handleRegister = async () => {
     setError("");
-    const isLocal = !email?.trim();
+    const identifier = email.trim();
+    const trimmedUsername = username.trim();
+    const trimmedPhone = phone.trim();
+    const isEmail = isEmailValue(identifier);
+    const normalizedPhone = normalizePhone(identifier);
+    const isPhone = !isEmail && normalizedPhone.length >= 7;
+    const isLocal = !isEmail;
+
     if (!name || !password) { setError("Completa nombre y contraseña."); return; }
-    if (!isLocal && accounts.find((a) => a.email?.toLowerCase() === email.toLowerCase())) {
+    if (mode === "register" && password !== passwordConfirmation) { setError("Las contraseñas no coinciden."); return; }
+    if (!identifier && !trimmedUsername && !trimmedPhone) { setError("Indica correo, usuario o teléfono para tu cuenta."); return; }
+
+    const accountEmail = isEmail ? identifier.toLowerCase() : "";
+    const accountPhone = trimmedPhone || (isPhone ? identifier : "");
+    const accountUsername = trimmedUsername || (isEmail ? identifier.split("@")[0].toLowerCase() : (isPhone ? "" : identifier.toLowerCase()));
+
+    if (!accountEmail && !accountUsername && !accountPhone) {
+      setError("Indica un correo, usuario o teléfono válido.");
+      return;
+    }
+    if (accountUsername && accounts.some((a) => a.username?.toLowerCase() === accountUsername.toLowerCase())) {
+      setError("Ese nombre de usuario ya está en uso. Elige otro.");
+      return;
+    }
+    if (accountEmail && accounts.some((a) => a.email?.toLowerCase() === accountEmail.toLowerCase())) {
       setError("Ese correo ya está registrado. Usa Iniciar sesión en lugar de crear una cuenta.");
       return;
     }
+    if (accountPhone && accounts.some((a) => normalizePhone(a.phone) === normalizePhone(accountPhone))) {
+      setError("Ese teléfono ya está registrado. Usa Iniciar sesión en lugar de crear una cuenta.");
+      return;
+    }
 
-    if (!isLocal) {
+    if (!isLocal && accountEmail) {
       try {
-        const { data: existingProfile, error: profileError } = await supabase.from("profiles").select("id").eq("email", email).maybeSingle();
+        const { data: existingProfile, error: profileError } = await supabase.from("profiles").select("id").eq("email", accountEmail).maybeSingle();
         if (!profileError && existingProfile) {
           setError("Ese correo ya está registrado. Usa Iniciar sesión en lugar de crear una cuenta.");
           return;
@@ -650,6 +750,32 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         console.warn("No se pudo verificar si el correo existe:", e.message);
       }
     }
+
+    const buildProfileRow = (profileData) => ({
+      id: profileData.id,
+      email: profileData.email,
+      username: profileData.username,
+      phone: profileData.phone,
+      name: profileData.name,
+      role: profileData.role,
+      branchId: profileData.branchId,
+      invitedByBranchId: profileData.invitedByBranchId,
+      active: profileData.active,
+      expiresAt: profileData.expiresAt,
+      createdAt: profileData.createdAt,
+    });
+
+    const baseAccount = {
+      id: uid(),
+      name,
+      email: accountEmail,
+      username: accountUsername,
+      phone: accountPhone,
+      localOnly: isLocal,
+      localPassword: isLocal ? password : null,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
 
     if (accountType === "admin") {
       if (!code) { setError("Ingresa el código de invitación de una rama ya aceptada en la red."); return; }
@@ -660,18 +786,17 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         return;
       }
       const account = {
-        id: uid(), name, email: isLocal ? "" : email, password: null,
-        localOnly: isLocal, localPassword: isLocal ? password : null,
-        branchId: null, role: "admin",
+        ...baseAccount,
+        branchId: null,
+        role: "admin",
         invitedByBranchId: adminCode.issuerBranchId || null,
-        active: true,
-        createdAt: new Date().toISOString(),
+        expiresAt: null,
       };
       try {
         setSubmitting(true);
         if (isLocal) {
           setAccounts([...accounts, account]);
-          setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: account.email || "local" } : c)));
+          setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: accountEmail || accountUsername || accountPhone || "local" } : c)));
           localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(account));
           onLogin(account);
           return;
@@ -679,10 +804,12 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
 
         const { data, error } = await supabase.auth.signUp({
           email: account.email,
-          password: password,
+          password,
           options: {
             data: {
               name: account.name,
+              username: account.username,
+              phone: account.phone,
               role: account.role,
               branchId: account.branchId,
               invitedByBranchId: account.invitedByBranchId,
@@ -693,22 +820,23 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           },
         });
         if (error) throw error;
-        const authAccount = { ...account, id: data.user?.id || account.id, password: null };
-        const profileRow = {
+        const profileRow = buildProfileRow({
           id: data.user?.id || account.id,
-          email: authAccount.email,
-          name: authAccount.name,
-          role: authAccount.role,
-          branchId: authAccount.branchId,
-          invitedByBranchId: authAccount.invitedByBranchId,
-          active: authAccount.active,
-          expiresAt: authAccount.expiresAt,
-          createdAt: authAccount.createdAt,
-        };
+          email: account.email,
+          username: account.username,
+          phone: account.phone,
+          name: account.name,
+          role: account.role,
+          branchId: account.branchId,
+          invitedByBranchId: account.invitedByBranchId,
+          active: account.active,
+          expiresAt: account.expiresAt,
+          createdAt: account.createdAt,
+        });
         const { error: profileError } = await supabase.from("profiles").upsert([profileRow]);
         if (profileError) throw profileError;
         setAccounts([...accounts, profileRow]);
-        setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: email } : c)));
+        setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: accountEmail || accountUsername || accountPhone || "local" } : c)));
         if (data.session) {
           onLogin(profileRow);
         } else {
@@ -727,11 +855,10 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       const branch = branches.find((b) => b.id === visitorBranchId && b.status === "approved");
       if (!branch) { setError("Selecciona la rama que deseas observar."); return; }
       const account = {
-        id: uid(), name, email: isLocal ? "" : email, password: null,
-        localOnly: isLocal, localPassword: isLocal ? password : null,
-        branchId: branch.id, role: "visitor",
-        active: true, expiresAt: addMonths(new Date(), 3).toISOString(),
-        createdAt: new Date().toISOString(),
+        ...baseAccount,
+        branchId: branch.id,
+        role: "visitor",
+        expiresAt: addMonths(new Date(), 3).toISOString(),
       };
       try {
         setSubmitting(true);
@@ -743,10 +870,12 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         }
         const { data, error } = await supabase.auth.signUp({
           email: account.email,
-          password: password,
+          password,
           options: {
             data: {
               name: account.name,
+              username: account.username,
+              phone: account.phone,
               role: account.role,
               branchId: account.branchId,
               active: account.active,
@@ -756,9 +885,11 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           },
         });
         if (error) throw error;
-        const profileRow = {
+        const profileRow = buildProfileRow({
           id: data.user?.id || account.id,
           email: account.email,
+          username: account.username,
+          phone: account.phone,
           name: account.name,
           role: account.role,
           branchId: account.branchId,
@@ -766,7 +897,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           active: account.active,
           expiresAt: account.expiresAt,
           createdAt: account.createdAt,
-        };
+        });
         const { error: profileError } = await supabase.from("profiles").upsert([profileRow]);
         if (profileError) throw profileError;
         setAccounts([...accounts, profileRow]);
@@ -797,12 +928,10 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       return;
     }
     const account = {
-      id: uid(), name, email: isLocal ? "" : email, password: null, localOnly: isLocal,
-      localPassword: isLocal ? password : null, branchId: branch.id,
+      ...baseAccount,
+      branchId: branch.id,
       role: accountType === "missionary" ? "missionary" : accountType === "visitor" ? "visitor" : "member",
-      active: true,
       expiresAt: accountType === "visitor" ? addMonths(new Date(), 3).toISOString() : null,
-      createdAt: new Date().toISOString(),
     };
     try {
       setSubmitting(true);
@@ -814,9 +943,11 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       }
       const { data, error } = await supabase.auth.signUp({
         email: account.email,
-        password: password,
+        password,
         options: {
           data: {
+            username: account.username,
+            phone: account.phone,
             name: account.name,
             role: account.role,
             branchId: account.branchId,
@@ -827,9 +958,11 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         },
       });
       if (error) throw error;
-      const profileRow = profileToDb({
+      const profileRow = buildProfileRow({
         id: data.user?.id || account.id,
         email: account.email,
+        username: account.username,
+        phone: account.phone,
         name: account.name,
         role: account.role,
         branchId: account.branchId,
@@ -858,13 +991,19 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
     setError("");
     setSubmitting(true);
     const tryLocalLogin = () => {
-      const account = accounts.find((a) => a.localOnly && a.localPassword === password && (email ? a.email?.toLowerCase() === email.toLowerCase() : !a.email));
+      const identifier = email?.trim().toLowerCase();
+      const account = accounts.find((a) => a.localOnly && a.localPassword === password && (
+        (identifier && a.email?.toLowerCase() === identifier) ||
+        (identifier && a.username?.toLowerCase() === identifier) ||
+        (identifier && normalizePhone(a.phone) === normalizePhone(identifier)) ||
+        (!identifier && !a.email && !a.username && !a.phone)
+      ));
       if (account) {
         onLogin(account);
         localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(account));
         return true;
       }
-      if (email?.trim().toLowerCase() === SEED_ADMIN_CREDENTIALS.email.toLowerCase() && password === SEED_ADMIN_CREDENTIALS.password) {
+      if (identifier === SEED_ADMIN_CREDENTIALS.email.toLowerCase() && password === SEED_ADMIN_CREDENTIALS.password) {
         const seedAdmin = {
           id: "seed-admin",
           name: "Admin fundador",
@@ -956,7 +1095,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         {mode === "register" && (
           <input placeholder="Nombre completo" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
         )}
-        <input placeholder="Correo electrónico" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
+        <input placeholder="Correo electrónico, usuario o teléfono" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
         {mode === "register" && (
           <div style={{ fontSize: 11, color: "#6a6a6a", marginTop: -2, marginBottom: 10 }}>
             Deja el correo vacío para crear una cuenta local sin usar Supabase.
@@ -968,6 +1107,9 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
             {showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
           </button>
         </div>
+        {mode === "register" && (
+          <input placeholder="Confirmar contraseña" type={showPassword ? "text" : "password"} value={passwordConfirmation} onChange={(e) => setPasswordConfirmation(e.target.value)} style={inputStyle} />
+        )}
         {mode === "register" && accountType === "visitor" && (
           <select value={visitorBranchId} onChange={(e) => setVisitorBranchId(e.target.value)} style={inputStyle}>
             <option value="">Selecciona una rama para observar</option>
@@ -1052,7 +1194,7 @@ function DirectoryView({ branches, onOpenBranch, onGoJoin, session }) {
             </div>
             <div style={{ marginTop: 10, fontSize: 12, color: "#767670" }}>{b.district} · {b.meetingTime}</div>
             <div style={{ marginTop: 3, fontSize: 11, color: b.siteUrl ? "#1f5c3f" : "#9a9a92", display: "flex", alignItems: "center", gap: 4 }}>
-              {b.siteUrl ? <><ExternalLink size={11} /> Abre en su propio sitio</> : <><Globe size={11} /> Usa este directorio compartido</>}
+              {b.siteUrl ? <><ExternalLink size={11} /> Abre en su propio sitio</> : <><Globe size={11} /> Usa este directorio público</>}
             </div>
           </div>
         ))}
@@ -1270,51 +1412,168 @@ function buildAnniversaries(members, year) {
   return items;
 }
 
-function CalendarView({ events, setEvents, branchId, session, members = [] }) {
+function getWeekDays(date) {
+  const result = [];
+  const start = new Date(date);
+  const day = start.getDay();
+  start.setDate(start.getDate() - day);
+  for (let i = 0; i < 7; i += 1) {
+    const next = new Date(start);
+    next.setDate(next.getDate() + i);
+    result.push(next);
+  }
+  return result;
+}
+
+function formatMonth(date) {
+  return date.toLocaleDateString("es-ES", { month: "long", year: "numeric" });
+}
+
+function buildYearOverview(itemsByDate) {
+  const months = {};
+  Object.keys(itemsByDate).sort().forEach((date) => {
+    const monthKey = date.slice(0, 7);
+    months[monthKey] = months[monthKey] || [];
+    months[monthKey].push(...itemsByDate[date]);
+  });
+  return months;
+}
+
+function CalendarView({ events, setEvents, branchId, session, members = [], ordinances = [] }) {
   const [cursor, setCursor] = useState(new Date());
   const [showModal, setShowModal] = useState(null);
+  const [viewMode, setViewMode] = useState("month");
 
   const eventsByDate = useMemo(() => {
     const map = {};
-    events.forEach((e) => { map[e.date] = map[e.date] || []; map[e.date].push(e); });
+    events.forEach((e) => { map[e.date] = map[e.date] || []; map[e.date].push({ ...e, type: "event" }); });
     return map;
   }, [events]);
+
+  const ordinancesByDate = useMemo(() => {
+    const map = {};
+    ordinances.forEach((o) => { map[o.date] = map[o.date] || []; map[o.date].push({ ...o, type: "ordinance" }); });
+    return map;
+  }, [ordinances]);
 
   const anniversariesByDate = useMemo(() => buildAnniversaries(members, cursor.getFullYear()), [members, cursor]);
 
   const combinedByDate = useMemo(() => {
     const map = {};
     Object.keys(eventsByDate).forEach((k) => { map[k] = [...eventsByDate[k]]; });
+    Object.keys(ordinancesByDate).forEach((k) => { map[k] = [...(map[k] || []), ...ordinancesByDate[k]]; });
     Object.keys(anniversariesByDate).forEach((k) => { map[k] = [...(map[k] || []), ...anniversariesByDate[k]]; });
     return map;
-  }, [eventsByDate, anniversariesByDate]);
+  }, [eventsByDate, ordinancesByDate, anniversariesByDate]);
+
+  const weekDays = useMemo(() => getWeekDays(cursor), [cursor]);
+  const yearOverview = useMemo(() => buildYearOverview(combinedByDate), [combinedByDate]);
+
+  const renderItem = (item) => {
+    const isAnniversary = item.kind === "anniversary";
+    const isOrdinance = item.type === "ordinance";
+    return (
+      <div style={{ fontSize: 10, background: isAnniversary ? "#fbeaea" : isOrdinance ? "#e8f1ff" : "#e2f3e8", color: isAnniversary ? "#8a4040" : isOrdinance ? "#0c447c" : "#1f5c3f", borderRadius: 4, padding: "2px 4px", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 3 }}>
+        {isAnniversary ? <Cake size={9} /> : isOrdinance ? <Droplet size={9} /> : null} {item.title || item.name}
+      </div>
+    );
+  };
 
   return (
-    <div className="container-page" style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
-      <MonthGrid cursor={cursor} setCursor={setCursor} itemsByDate={combinedByDate} onDayClick={setShowModal}
-        renderItem={(ev) => (
-          <div style={{ fontSize: 10, background: ev.kind ? "#fbeaea" : "#e2f3e8", color: ev.kind ? "#8a4040" : "#1f5c3f", borderRadius: 4, padding: "2px 4px", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 3 }}>
-            {ev.kind && <Cake size={9} />} {ev.title}
-          </div>
-        )} />
+    <div className="container-page" style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 20 }}>
+        <div>
+          <div style={{ fontWeight: 500, fontSize: 16 }}>Calendario</div>
+          <div style={{ fontSize: 13, color: "#767670" }}>Agenda mensual, semanal o anual con actividades y ordenanzas.</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {['month', 'week', 'year'].map((mode) => (
+            <button key={mode} onClick={() => setViewMode(mode)} className="btn-secondary" style={{ ...secondaryBtn, background: viewMode === mode ? '#1f5c3f' : '#fff', color: viewMode === mode ? '#fff' : '#334033' }}>
+              {mode === 'month' ? 'Mes' : mode === 'week' ? 'Semana' : 'Año'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {viewMode === 'month' && (
+        <MonthGrid cursor={cursor} setCursor={setCursor} itemsByDate={combinedByDate} onDayClick={setShowModal}
+          renderItem={renderItem} />
+      )}
+      {viewMode === 'week' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 }}>
+          {weekDays.map((day) => {
+            const key = day.toISOString().slice(0, 10);
+            return (
+              <div key={key} style={{ border: '1px solid #e4e4e0', borderRadius: 12, padding: 12, background: '#fff' }}>
+                <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 8 }}>{day.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+                {(combinedByDate[key] || []).map((item) => renderItem(item))}
+                <button onClick={() => setShowModal(key)} style={{ marginTop: 10, width: '100%', border: 'none', background: '#1f5c3f', color: '#fff', borderRadius: 8, padding: '8px 10px', fontSize: 12, cursor: 'pointer' }}>Abrir día</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {viewMode === 'year' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
+          {Object.entries(yearOverview).map(([month, items]) => (
+            <div key={month} style={{ border: '1px solid #e4e4e0', borderRadius: 12, padding: 14, background: '#fff' }}>
+              <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>{new Date(`${month}-01`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</div>
+              {items.slice(0, 8).map((item, index) => (
+                <div key={`${month}-${index}`} style={{ marginBottom: 6 }}>{renderItem(item)}</div>
+              ))}
+              {items.length > 8 && <div style={{ fontSize: 11, color: '#767670' }}>+ {items.length - 8} más</div>}
+            </div>
+          ))}
+        </div>
+      )}
+
       {showModal && (
-        <DayEventModal date={showModal} events={eventsByDate[showModal] || []} anniversaries={anniversariesByDate[showModal] || []}
+        <DayEventModal date={showModal} events={eventsByDate[showModal] || []} ordinances={ordinancesByDate[showModal] || []} anniversaries={anniversariesByDate[showModal] || []}
           onClose={() => setShowModal(null)} session={session}
-          onAdd={(title, time) => setEvents([...events, { id: uid(), title, date: showModal, time, branchId, createdBy: session?.id || null, createdByName: session?.name || "Anónimo" }])}
-          onDelete={(id) => setEvents(events.filter((e) => e.id !== id))} />
+          onAddEvent={(title, time) => setEvents([...events, { id: uid(), title, date: showModal, time, branchId, createdBy: session?.id || null, createdByName: session?.name || 'Anónimo' }])}
+          onDeleteEvent={(id) => setEvents(events.filter((e) => e.id !== id))}
+          onAddOrdinance={(type, name) => setOrdinances([...ordinances, { id: uid(), type, name, date: showModal, branchId, createdBy: session?.id || null, createdByName: session?.name || 'Anónimo' }])}
+          onDeleteOrdinance={(id) => setOrdinances(ordinances.filter((o) => o.id !== id))} />
       )}
     </div>
   );
 }
 
-function DayEventModal({ date, events, anniversaries = [], onClose, onAdd, onDelete, session }) {
+function DayEventModal({ date, events, ordinances = [], anniversaries = [], onClose, onAddEvent, onDeleteEvent, onAddOrdinance, onDeleteOrdinance, session }) {
   const [title, setTitle] = useState("");
   const [time, setTime] = useState("10:00");
-  const canManage = (ev) => session?.role === "admin" || (session && ev.createdBy === session.id);
+  const [ordName, setOrdName] = useState("");
+  const [ordType, setOrdType] = useState("bautismo");
+  const canManage = (item) => session?.role === "admin" || (session && item.createdBy === session.id);
   const canCreate = isActiveSession(session);
+
+  const renderItem = (item) => {
+    if (item.type === "ordinance") {
+      const t = ORDINANCE_TYPES.find((x) => x.id === item.type) || ORDINANCE_TYPES[0];
+      return (
+        <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", border: "1px solid #e4e4e0", borderRadius: 8, padding: 8, marginBottom: 6 }}>
+          <div>
+            <div style={{ fontWeight: 500 }}>{item.name}</div>
+            <div style={{ color: "#767670", fontSize: 11 }}>{t.label}{item.createdByName ? ` · agregado por ${item.createdByName}` : ""}</div>
+          </div>
+          {canManage(item) && isActiveSession(session) && <X size={14} style={{ cursor: "pointer", color: "#9a9a92" }} onClick={() => onDeleteOrdinance(item.id)} />}
+        </div>
+      );
+    }
+    return (
+      <div key={item.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", border: "1px solid #e4e4e0", borderRadius: 8, padding: 8, marginBottom: 6 }}>
+        <div>
+          <div style={{ fontWeight: 500 }}>{item.title}</div>
+          <div style={{ color: "#767670", fontSize: 11 }}>{item.time}{item.createdByName ? ` · agregado por ${item.createdByName}` : ""}</div>
+        </div>
+        {canManage(item) && isActiveSession(session) && <X size={14} style={{ cursor: "pointer", color: "#9a9a92" }} onClick={() => onDeleteEvent(item.id)} />}
+      </div>
+    );
+  };
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={onClose}>
-      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 24, width: 380, maxWidth: "90vw" }}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 24, width: 420, maxWidth: "90vw" }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
           <div style={{ fontWeight: 500 }}>{date}</div>
           <X size={18} style={{ cursor: "pointer" }} onClick={onClose} />
@@ -1324,21 +1583,25 @@ function DayEventModal({ date, events, anniversaries = [], onClose, onAdd, onDel
             <Cake size={13} /> {a.title}
           </div>
         ))}
-        {events.map((ev) => (
-          <div key={ev.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", border: "1px solid #e4e4e0", borderRadius: 8, padding: 8, marginBottom: 6, fontSize: 13 }}>
-            <div>
-              <div style={{ fontWeight: 500 }}>{ev.title}</div>
-              <div style={{ color: "#767670", fontSize: 11 }}>{ev.time}{ev.createdByName ? ` · agregado por ${ev.createdByName}` : ""}</div>
-            </div>
-            {canManage(ev) && isActiveSession(session) && <X size={14} style={{ cursor: "pointer", color: "#9a9a92" }} onClick={() => onDelete(ev.id)} />}
-          </div>
-        ))}
+        {events.map((ev) => renderItem(ev))}
+        {ordinances.map((o) => renderItem(o))}
         {canCreate ? (
-          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-            <input placeholder="Nombre de la actividad" value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
-            <input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={inputStyle} />
-            <button onClick={() => { if (title) { onAdd(title, time); setTitle(""); } }} className="btn-primary" style={primaryBtn}>Agregar actividad</button>
-          </div>
+          <>
+            <div style={{ fontWeight: 500, marginBottom: 8, marginTop: 8 }}>Agregar actividad</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 12 }}>
+              <input placeholder="Nombre de la actividad" value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
+              <input type="time" value={time} onChange={(e) => setTime(e.target.value)} style={inputStyle} />
+              <button onClick={() => { if (title) { onAddEvent(title, time); setTitle(""); } }} className="btn-primary" style={primaryBtn}>Agregar actividad</button>
+            </div>
+            <div style={{ fontWeight: 500, marginBottom: 8 }}>Agregar ordenanza</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <select value={ordType} onChange={(e) => setOrdType(e.target.value)} style={inputStyle}>
+                {ORDINANCE_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+              <input placeholder="Nombre de la persona" value={ordName} onChange={(e) => setOrdName(e.target.value)} style={inputStyle} />
+              <button onClick={() => { if (ordName) { onAddOrdinance(ordType, ordName); setOrdName(""); } }} className="btn-secondary" style={secondaryBtn}>Agregar ordenanza</button>
+            </div>
+          </>
         ) : session && (
           <div style={{ marginTop: 12, fontSize: 11, color: "#9a9a92", display: "flex", alignItems: "center", gap: 6 }}>
             <Lock size={12} /> Tu cuenta es de solo lectura.
@@ -1492,9 +1755,9 @@ function SpeakersView({ speakers, setSpeakers, branchId, session }) {
   );
 }
 
-function MembersView({ members, setMembers, branchId, session }) {
+function MembersView({ members, setMembers, branchId, session, roles }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: "", role: "Miembro", phone: "", birthDate: "", baptismDate: "" });
+  const [form, setForm] = useState({ name: "", role: roles[0] || "Miembro", phone: "", birthDate: "", baptismDate: "" });
   const [linkToMe, setLinkToMe] = useState(false);
   const branchMembers = members.filter((m) => m.branchId === branchId);
   const canAdd = isActiveSession(session);
@@ -1537,7 +1800,7 @@ function MembersView({ members, setMembers, branchId, session }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <input placeholder="Nombre completo" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} style={inputStyle}>
-                {CHURCH_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                {roles.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
               <div>
                 <div style={{ fontSize: 11, color: "#767670", marginBottom: 3 }}>Cumpleaños (opcional)</div>
@@ -2244,7 +2507,68 @@ function CentralRegisterCard({ onSubmit, otherBranches }) {
   );
 }
 
-function AdminView({ branches, setBranches, speakers, photos, setPhotos, missionaries, setMissionaries, accounts, setAccounts, session, events, ordinances, members, companionships, messages, setMessages, branchCredentials, setBranchCredentials }) {
+function WelcomeEditorCard({ welcomePage, setWelcomePage }) {
+  const [draft, setDraft] = useState(welcomePage);
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef(null);
+
+  const handlePhoto = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setDraft((prev) => ({ ...prev, featuredPhoto: reader.result }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div style={{ border: "1px solid #e4e4e0", borderRadius: 14, padding: 18, marginTop: 20, background: "#fff" }}>
+      <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 12 }}>Editar bienvenida</div>
+      <div style={{ display: "grid", gap: 12 }}>
+        <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Título de bienvenida" style={inputStyle} />
+        <input value={draft.subtitle} onChange={(e) => setDraft({ ...draft, subtitle: e.target.value })} placeholder="Subtítulo" style={inputStyle} />
+        <textarea value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Texto de bienvenida" style={{ ...inputStyle, minHeight: 90, resize: "vertical" }} />
+        <input value={draft.address} onChange={(e) => setDraft({ ...draft, address: e.target.value })} placeholder="Dirección principal de la rama" style={inputStyle} />
+        <input value={draft.missionariesA} onChange={(e) => setDraft({ ...draft, missionariesA: e.target.value })} placeholder="Misioneros A" style={inputStyle} />
+        <input value={draft.missionariesB} onChange={(e) => setDraft({ ...draft, missionariesB: e.target.value })} placeholder="Misioneros B" style={inputStyle} />
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <input ref={fileRef} type="file" accept="image/*" onChange={handlePhoto} style={{ fontSize: 12 }} />
+          <button onClick={() => { setSaving(true); setWelcomePage(draft); setTimeout(() => setSaving(false), 300); }} className="btn-primary" style={primaryBtn}>{saving ? "Guardando..." : "Guardar bienvenida"}</button>
+        </div>
+        {draft.featuredPhoto && <img src={draft.featuredPhoto} alt="Vista previa" style={{ width: "100%", maxHeight: 200, objectFit: "cover", borderRadius: 12 }} />}
+      </div>
+    </div>
+  );
+}
+
+function RolesEditorCard({ roles, setRoles }) {
+  const [newRole, setNewRole] = useState("");
+  return (
+    <div style={{ border: "1px solid #e4e4e0", borderRadius: 14, padding: 18, background: "#fff", marginTop: 20 }}>
+      <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 12 }}>Roles de la comunidad</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        {roles.map((role) => (
+          <div key={role} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 10px", borderRadius: 999, background: "#eef3ee", color: "#1f5c3f", fontSize: 12 }}>
+            <span>{role}</span>
+            <button type="button" onClick={() => setRoles(roles.filter((r) => r !== role))} style={{ border: "none", background: "none", color: "#a33", cursor: "pointer", fontSize: 12 }}>×</button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <input value={newRole} onChange={(e) => setNewRole(e.target.value)} placeholder="Agregar nuevo rol" style={{ ...inputStyle, flex: 1, minWidth: 220 }} />
+        <button onClick={() => {
+          const trimmed = newRole.trim();
+          if (!trimmed) return;
+          if (roles.includes(trimmed)) return;
+          setRoles([...roles, trimmed]);
+          setNewRole("");
+        }} className="btn-primary" style={{ ...primaryBtn, padding: "10px 14px", minWidth: 120 }}>Agregar rol</button>
+      </div>
+    </div>
+  );}
+
+function AdminView({ branches, setBranches, speakers, photos, setPhotos, missionaries, setMissionaries, accounts, setAccounts, session, events, ordinances, members, companionships, messages, setMessages, branchCredentials, setBranchCredentials, welcomePage, setWelcomePage, roles, setRoles }) {
   const [copiedCode, setCopiedCode] = useState(null);
   const [transferTarget, setTransferTarget] = useState(null);
   const [verification, setVerification] = useState({ status: "idle", message: "" });
@@ -2490,13 +2814,15 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
       {speakers.slice().sort((a, b) => a.date.localeCompare(b.date)).map((s) => (
         <div key={s.id} style={{ fontSize: 12, color: "#334033", marginBottom: 4 }}>{s.date} — {s.name}</div>
       ))}
+      <RolesEditorCard roles={roles} setRoles={setRoles} />
+      <WelcomeEditorCard welcomePage={welcomePage} setWelcomePage={setWelcomePage} />
     </div>
   );
 }
 
 export default function App() {
   const [branches, setBranches, branchesLoaded] = useStore(STORAGE_KEYS.BRANCHES, [seedBranch]);
-  const [events, setEvents] = useStore(STORAGE_KEYS.EVENTS, []);
+  const [events, setEvents, eventsLoaded] = useStore(STORAGE_KEYS.EVENTS, []);
   const [speakers, setSpeakers] = useStore(STORAGE_KEYS.SPEAKERS, []);
   const [ordinances, setOrdinances] = useStore(STORAGE_KEYS.ORDINANCES, []);
   const [members, setMembers] = useStore(STORAGE_KEYS.MEMBERS, []);
@@ -2507,8 +2833,18 @@ export default function App() {
   const [companionships, setCompanionships] = useStore(STORAGE_KEYS.COMPANIONSHIPS, []);
   const [adminCodes, setAdminCodes] = useStore(STORAGE_KEYS.ADMIN_CODES, []);
   const [branchCredentials, setBranchCredentials] = useStore(STORAGE_KEYS.BRANCH_CREDENTIALS, [], false);
+  const [roles, setRoles] = useStore(STORAGE_KEYS.ROLES, CHURCH_ROLES);
+  const [welcomePage, setWelcomePage] = useStore(STORAGE_KEYS.WELCOME_PAGE, {
+    title: "Bienvenidos a la Red de Ramas",
+    subtitle: "Una comunidad de ramas autosuficientes y conectadas para compartir herramientas, noticias y eventos.",
+    body: "Accede a tu rama, agrega actividad y coordina eventos desde tu panel local.",
+    address: "Calle 12 #34-56, Sincelejo, Sucre",
+    missionariesA: "Misioneros A: Elder Luis y Sister María · +57 300 000 0000",
+    missionariesB: "Misioneros B: Elder Jorge y Sister Ana · +57 300 111 1111",
+    featuredPhoto: null,
+  });
 
-  const [view, setView] = useState("directory");
+  const [view, setView] = useState("welcome");
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -2692,7 +3028,7 @@ export default function App() {
         await supabase.auth.signOut();
         localStorage.removeItem(STORAGE_KEYS.SESSION);
         setSession(null);
-        setView("directory");
+        setView("welcome");
       }}
         chatUnread={chatUnread} speakerGaps={speakerGaps} />
 
@@ -2713,15 +3049,15 @@ export default function App() {
       )}
 
       {view === "red" && <ManifestoView />}
-      {view === "calendar" && <CalendarView events={events} setEvents={setEvents} branchId={primaryBranchId} session={session} members={members} />}
-      {view === "ordinances" && <OrdinancesView ordinances={ordinances} setOrdinances={setOrdinances} branchId={primaryBranchId} session={session} members={members} />}
+      {view === "calendar" && <CalendarView events={events} setEvents={setEvents} branchId={primaryBranchId} session={session} members={members} ordinances={ordinances} />}
       {view === "speakers" && <SpeakersView speakers={speakers} setSpeakers={setSpeakers} branchId={primaryBranchId} session={session} />}
-      {view === "members" && <MembersView members={members} setMembers={setMembers} branchId={primaryBranchId} session={session} />}
+      {view === "members" && <MembersView members={members} setMembers={setMembers} branchId={primaryBranchId} session={session} roles={roles} />}
       {view === "missionaries" && (
         <MissionariesView missionaries={missionariesWithStatus} setMissionaries={setMissionaries} companionships={companionships}
           setCompanionships={setCompanionships} session={session} primaryBranchId={primaryBranchId} />
       )}
       {view === "photos" && <PhotosView photos={photos} setPhotos={setPhotos} branchId={primaryBranchId} session={session} />}
+      {view === "welcome" && <WelcomeView welcomePage={welcomePage} photos={photos} onExplore={() => setView("directory")} onLogin={() => setView("login")} />}
       {view === "chat" && <ChatView messages={messages} setMessages={setMessages} branchId={primaryBranchId} session={session} />}
       {view === "admin" && (
         !session ? (
@@ -2734,7 +3070,8 @@ export default function App() {
           <AdminView branches={branches} setBranches={setBranches} speakers={speakers} photos={photos} setPhotos={setPhotos}
             missionaries={missionaries} setMissionaries={setMissionaries} accounts={accounts} setAccounts={setAccounts}
             session={session} events={events} ordinances={ordinances} members={members} companionships={companionships}
-            messages={messages} setMessages={setMessages} branchCredentials={branchCredentials} setBranchCredentials={setBranchCredentials} />
+            messages={messages} setMessages={setMessages} branchCredentials={branchCredentials} setBranchCredentials={setBranchCredentials}
+            welcomePage={welcomePage} setWelcomePage={setWelcomePage} roles={roles} setRoles={setRoles} />
         ) : (
           <div className="container-page" style={{ padding: 60, textAlign: "center" }}>
             <AlertCircle size={24} color="#9a9a92" style={{ marginBottom: 10 }} />

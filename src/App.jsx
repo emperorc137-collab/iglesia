@@ -83,7 +83,7 @@ const seedBranch = {
   status: "approved",
   verification: "verified",
   meetingTime: "Domingo 9:00 AM",
-  adminId: null,
+  adminId: "seed-admin",
   parentBranchId: null,
   serverBranchId: null,
   siteUrl: "",
@@ -1117,7 +1117,7 @@ function LoginView({ accounts, setAccounts, branches, setBranches, adminCodes, s
           name: "Admin fundador",
           email: SEED_ADMIN_CREDENTIALS.email,
           role: "admin",
-          branchId: null,
+          branchId: seedBranch.id,
           localOnly: true,
           localPassword: SEED_ADMIN_CREDENTIALS.password,
           active: true,
@@ -3194,7 +3194,7 @@ function AdminView({ branches, setBranches, speakers, setSpeakers, photos, setPh
   const [copiedCode, setCopiedCode] = useState(null);
   const [transferTarget, setTransferTarget] = useState(null);
   const [verification, setVerification] = useState({ status: "idle", message: "" });
-  const myBranch = branches.find((b) => b.adminId === session.id);
+  const myBranch = branches.find((b) => b.adminId === session.id) || branches.find((b) => session.role === "admin" && b.id === session.branchId);
   const myCredential = myBranch ? branchCredentials.find((c) => c.branchId === myBranch.id) : null;
   const branchPhotos = myBranch ? photos.filter((p) => p.branchId === myBranch.id) : [];
   const branchMessages = myBranch ? messages.filter((m) => m.branchId === myBranch.id) : [];
@@ -3696,6 +3696,7 @@ export default function App() {
       if (b.bannerUrl === undefined) { patch.bannerUrl = ""; changed = true; }
       if (b.status === undefined) { patch.status = "approved"; changed = true; }
       if (b.verification === undefined) { patch.verification = b.id === seedBranch.id ? "verified" : "pending"; changed = true; }
+      if (b.id === seedBranch.id && b.adminId !== "seed-admin") { patch.adminId = "seed-admin"; changed = true; }
       if (b.adminId === undefined) { patch.adminId = null; changed = true; }
       return Object.keys(patch).length ? normalizeBranchCodes({ ...b, ...patch }) : normalizeBranchCodes(b);
     });

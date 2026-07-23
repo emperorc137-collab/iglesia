@@ -20,6 +20,8 @@ const STORAGE_KEYS = {
   MESSAGES: "messages",
   ACCOUNTS: "accounts",
   SESSION: "activeSession",
+  WELCOME_PAGE: "welcome_page",
+  ROLES: "roles",
   MISSIONARIES: "missionaries",
   COMPANIONSHIPS: "companionships",
   ADMIN_CODES: "admin_codes",
@@ -30,6 +32,8 @@ const SUPABASE_STORE_KEYS = new Set([
   STORAGE_KEYS.EVENTS, STORAGE_KEYS.SPEAKERS, STORAGE_KEYS.ORDINANCES, STORAGE_KEYS.MEMBERS,
   STORAGE_KEYS.PHOTOS, STORAGE_KEYS.MESSAGES, STORAGE_KEYS.MISSIONARIES,
   STORAGE_KEYS.COMPANIONSHIPS, STORAGE_KEYS.ADMIN_CODES, STORAGE_KEYS.BRANCH_CREDENTIALS,
+  STORAGE_KEYS.WELCOME_PAGE,
+  STORAGE_KEYS.ROLES,
 ]);
 
 const PROFILE_FIELDS = ['id', 'email', 'name', 'role', 'branch_id', 'invited_by_branch_id', 'active', 'expires_at', 'created_at'];
@@ -372,6 +376,128 @@ const iconBtnStyle = {
   display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
 };
 
+const defaultWelcome = {
+  mapImage: "",
+  address: "Calle Principal, Sincelejo, Sucre, Colombia",
+  contacts: ["+57 300 0000000"],
+  missionariesA: "Misioneros A",
+  missionariesB: "Misioneros B",
+  welcomeMessage: "Bienvenidos a la comunidad de la Rama. ¡Nos alegra tenerte aquí!",
+};
+
+function WelcomePage({ onClose }) {
+  const [welcome, setWelcome] = useStore(STORAGE_KEYS.WELCOME_PAGE, defaultWelcome);
+  const [allPhotos] = useStore(STORAGE_KEYS.PHOTOS, []);
+  const [editing, setEditing] = useState(false);
+  const [selectedMissionary, setSelectedMissionary] = useState("A");
+
+  const isAdmin = (typeof window !== 'undefined' && window.__session__ && window.__session__.role === 'admin');
+
+  const save = () => {
+    setWelcome(welcome);
+    setEditing(false);
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }}>
+      <div style={{ width: 920, maxWidth: "96%", background: "#fff", borderRadius: 12, padding: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>Bienvenida — {welcome.address}</div>
+            <div style={{ color: "#6b6b6b", fontSize: 13 }}>{welcome.welcomeMessage}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {isAdmin && <button onClick={() => setEditing(!editing)} style={secondaryBtn}>{editing ? 'Cancelar' : 'Editar'}</button>}
+            <button onClick={() => { localStorage.setItem('seen_welcome','true'); onClose?.(); }} style={primaryBtn}>Cerrar</button>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16 }}>
+          <div style={{ minHeight: 220, background: "#f3f3f3", borderRadius: 8, padding: 12 }}>
+            {welcome.mapImage ? (
+              <img src={welcome.mapImage} alt="Mapa" style={{ width: "100%", borderRadius: 8 }} />
+            ) : (
+              <div style={{ width: "100%", height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: "#9a9a92" }}>Mapa de Sincelejo (sin imagen)</div>
+            )}
+
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontWeight: 600 }}>Dirección</div>
+              <div style={{ color: "#444" }}>{welcome.address}</div>
+              <div style={{ fontWeight: 600, marginTop: 8 }}>Contactos</div>
+              {welcome.contacts && welcome.contacts.map((c, i) => <div key={i} style={{ color: "#444" }}>{c}</div>)}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <button onClick={() => setSelectedMissionary('A')} style={{ ...(selectedMissionary==='A' ? primaryBtn : secondaryBtn) }}>{welcome.missionariesA}</button>
+              <button onClick={() => setSelectedMissionary('B')} style={{ ...(selectedMissionary==='B' ? primaryBtn : secondaryBtn) }}>{welcome.missionariesB}</button>
+            </div>
+            <div style={{ padding: 12, borderRadius: 8, background: selectedMissionary === 'A' ? '#e8f6f0' : '#fff' }}>
+              {selectedMissionary === 'A' ? (
+                <div>Zona resaltada para {welcome.missionariesA}.</div>
+              ) : (
+                <div>Zona resaltada para {welcome.missionariesB}.</div>
+              )}
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontWeight: 600 }}>Fotos de la comunidad</div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                  {(() => {
+                    const approved = (allPhotos || []).filter(p => p.status === 'approved');
+                    if (approved.length === 0) return <div style={{ color: '#9a9a92' }}>Sin fotos aún</div>;
+                    const shuffled = approved.slice().sort(() => 0.5 - Math.random());
+                    return shuffled.slice(0,6).map((p, i) => (
+                      <img key={p.id || i} src={p.dataUrl || p.src} alt={p.caption || ''} style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6 }} />
+                    ));
+                  })()}
+                </div>
+            </div>
+          </div>
+        </div>
+
+        {editing && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div>
+                <label style={{ fontSize: 13 }}>Dirección</label>
+                <input style={inputStyle} value={welcome.address || ''} onChange={(e) => setWelcome({ ...welcome, address: e.target.value })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13 }}>Mapa (URL de imagen)</label>
+                <input style={inputStyle} value={welcome.mapImage || ''} onChange={(e) => setWelcome({ ...welcome, mapImage: e.target.value })} />
+              </div>
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <label style={{ fontSize: 13 }}>Contactos (separados por coma)</label>
+              <input style={inputStyle} value={(welcome.contacts || []).join(', ')} onChange={(e) => setWelcome({ ...welcome, contacts: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+              <div>
+                <label style={{ fontSize: 13 }}>Nombre Misioneros A</label>
+                <input style={inputStyle} value={welcome.missionariesA || ''} onChange={(e) => setWelcome({ ...welcome, missionariesA: e.target.value })} />
+              </div>
+              <div>
+                <label style={{ fontSize: 13 }}>Nombre Misioneros B</label>
+                <input style={inputStyle} value={welcome.missionariesB || ''} onChange={(e) => setWelcome({ ...welcome, missionariesB: e.target.value })} />
+              </div>
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <label style={{ fontSize: 13 }}>Mensaje de bienvenida</label>
+              <textarea style={{ ...inputStyle, minHeight: 80 }} value={welcome.welcomeMessage || ''} onChange={(e) => setWelcome({ ...welcome, welcomeMessage: e.target.value })} />
+            </div>
+            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+              <button onClick={save} style={primaryBtn}>Guardar</button>
+              <button onClick={() => setEditing(false)} style={secondaryBtn}>Cancelar</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 async function geocodeAddress(address) {
   try {
     const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`;
@@ -500,7 +626,7 @@ function MapLegend() {
         <span style={{ width: 18, height: 0, borderTop: "2px dashed #1f5c3f" }} /> Invitación
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ width: 18, height: 0, borderTop: "2px dotted #0c447c" }} /> Servidor compartido
+        <span style={{ width: 18, height: 0, borderTop: "2px dotted #0c447c" }} /> Servidor
       </div>
     </div>
   );
@@ -539,7 +665,6 @@ function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps 
     { id: "directory", label: "Directorio", icon: MapPin },
     { id: "red", label: "La Red", icon: BookOpen },
     { id: "calendar", label: "Calendario", icon: Calendar },
-    { id: "ordinances", label: "Ordenanzas", icon: Droplet },
     { id: "speakers", label: "Discursos", icon: Mic, badge: speakerGaps },
     { id: "members", label: "Miembros", icon: Users },
     { id: "missionaries", label: "Misioneros", icon: Compass },
@@ -547,6 +672,7 @@ function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps 
     { id: "chat", label: "Chat", icon: MessageCircle, badge: chatUnread },
     { id: "admin", label: "Admin", icon: Shield },
   ];
+  const visibleTabs = tabs.filter(t => !(t.id === 'admin' && !(session && session.role === 'admin')));
   return (
     <div className="app-header" style={{
       display: "flex", alignItems: "center", justifyContent: "space-between",
@@ -561,7 +687,7 @@ function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps 
         </div>
       </div>
       <div className="nav-tabs" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {tabs.map((t) => (
+        {visibleTabs.map((t) => (
           <button key={t.id} className="nav-tab-btn btn-secondary" onClick={() => setView(t.id)} style={{
             display: "flex", alignItems: "center", gap: 5, padding: "6px 10px", borderRadius: 8, position: "relative",
             border: "1px solid " + (view === t.id ? "#1f5c3f" : "#e4e4e0"),
@@ -596,8 +722,13 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
   const [mode, setMode] = useState("login");
   const [accountType, setAccountType] = useState("member");
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
+  const [regEmail, setRegEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [identifier, setIdentifier] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [code, setCode] = useState("");
   const [visitorBranchId, setVisitorBranchId] = useState(branches.find((b) => b.status === "approved")?.id || "");
   const [error, setError] = useState("");
@@ -629,10 +760,15 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
 
   const handleRegister = async () => {
     setError("");
-    const isLocal = !email?.trim();
-    if (!name || !password) { setError("Completa nombre y contraseña."); return; }
-    if (!isLocal && accounts.find((a) => a.email?.toLowerCase() === email.toLowerCase())) {
+    const isLocal = !regEmail?.trim();
+    if (!username || !password) { setError("Completa nombre de usuario y contraseña."); return; }
+    if (password !== passwordConfirm) { setError("Las contraseñas no coinciden."); return; }
+    if (!isLocal && accounts.find((a) => a.email?.toLowerCase() === regEmail.toLowerCase())) {
       setError("Ese correo ya está registrado. Usa Iniciar sesión en lugar de crear una cuenta.");
+      return;
+    }
+    if (accounts.find((a) => a.username && a.username.toLowerCase() === username.toLowerCase())) {
+      setError("Ese nombre de usuario ya está en uso. Elige otro.");
       return;
     }
 
@@ -657,7 +793,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         return;
       }
       const account = {
-        id: uid(), name, email: isLocal ? "" : email, password: null,
+        id: uid(), name, username, email: isLocal ? "" : regEmail, phone: phone || "", password: null,
         localOnly: isLocal, localPassword: isLocal ? password : null,
         branchId: null, role: "admin",
         invitedByBranchId: adminCode.issuerBranchId || null,
@@ -680,6 +816,8 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           options: {
             data: {
               name: account.name,
+              username: account.username,
+              phone: account.phone,
               role: account.role,
               branchId: account.branchId,
               invitedByBranchId: account.invitedByBranchId,
@@ -695,6 +833,8 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           id: data.user?.id || account.id,
           email: authAccount.email,
           name: authAccount.name,
+          username: authAccount.username || account.username,
+          phone: authAccount.phone || account.phone,
           role: authAccount.role,
           branchId: authAccount.branchId,
           invitedByBranchId: authAccount.invitedByBranchId,
@@ -705,7 +845,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         const { error: profileError } = await supabase.from("profiles").upsert([profileRow]);
         if (profileError) throw profileError;
         setAccounts([...accounts, profileRow]);
-        setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: email } : c)));
+        setAdminCodes(adminCodes.map((c) => (c.code === adminCode.code ? { ...c, used: true, usedBy: account.email || account.username || 'local' } : c)));
         if (data.session) {
           onLogin(profileRow);
         } else {
@@ -724,7 +864,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       const branch = branches.find((b) => b.id === visitorBranchId && b.status === "approved");
       if (!branch) { setError("Selecciona la rama que deseas observar."); return; }
       const account = {
-        id: uid(), name, email: isLocal ? "" : email, password: null,
+        id: uid(), name, username, email: isLocal ? "" : regEmail, phone: phone || "", password: null,
         localOnly: isLocal, localPassword: isLocal ? password : null,
         branchId: branch.id, role: "visitor",
         active: true, expiresAt: addMonths(new Date(), 3).toISOString(),
@@ -744,6 +884,8 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           options: {
             data: {
               name: account.name,
+              username: account.username,
+              phone: account.phone,
               role: account.role,
               branchId: account.branchId,
               active: account.active,
@@ -757,6 +899,8 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
           id: data.user?.id || account.id,
           email: account.email,
           name: account.name,
+          username: account.username,
+          phone: account.phone,
           role: account.role,
           branchId: account.branchId,
           invitedByBranchId: account.invitedByBranchId,
@@ -794,7 +938,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       return;
     }
     const account = {
-      id: uid(), name, email: isLocal ? "" : email, password: null, localOnly: isLocal,
+      id: uid(), name, username, email: isLocal ? "" : regEmail, phone: phone || "", password: null, localOnly: isLocal,
       localPassword: isLocal ? password : null, branchId: branch.id,
       role: accountType === "missionary" ? "missionary" : accountType === "visitor" ? "visitor" : "member",
       active: true,
@@ -815,6 +959,8 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
         options: {
           data: {
             name: account.name,
+            username: account.username,
+            phone: account.phone,
             role: account.role,
             branchId: account.branchId,
             active: account.active,
@@ -855,7 +1001,9 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
     setError("");
     setSubmitting(true);
     const tryLocalLogin = () => {
-      const account = accounts.find((a) => a.localOnly && a.localPassword === password && (email ? a.email?.toLowerCase() === email.toLowerCase() : !a.email));
+      const account = accounts.find((a) => a.localOnly && a.localPassword === password && (
+        (identifier && ((a.email && a.email.toLowerCase() === identifier.toLowerCase()) || (a.username && a.username.toLowerCase() === identifier.toLowerCase()) || (a.phone && a.phone === identifier))) || (!identifier && a.localOnly)
+      ));
       if (account) {
         onLogin(account);
         localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(account));
@@ -865,14 +1013,28 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
     };
 
     try {
-      if (!email?.trim()) {
+      if (!identifier?.trim()) {
         if (tryLocalLogin()) return;
-        setError("Ingresa tu contraseña para la cuenta local.");
+        setError("Ingresa tu identificador (usuario, teléfono o correo) para iniciar sesión localmente.");
         return;
       }
 
       try {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        // Resolve identifier to an email if possible (username or phone -> email)
+        let loginEmail = null;
+        if (identifier.includes("@")) loginEmail = identifier.trim();
+        else {
+          const found = accounts.find((a) => (a.username && a.username.toLowerCase() === identifier.toLowerCase()) || (a.phone && a.phone === identifier));
+          if (found && found.email) loginEmail = found.email;
+        }
+        if (!loginEmail) {
+          // Try local login fallback
+          if (tryLocalLogin()) return;
+          setError("No se encontró una cuenta asociada a ese identificador.");
+          return;
+        }
+
+        const { data, error } = await supabase.auth.signInWithPassword({ email: loginEmail, password });
         if (!error && data) {
           const authUser = data.user || data.session?.user;
           if (authUser) {
@@ -893,7 +1055,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       }
 
       if (tryLocalLogin()) return;
-      setError("Correo o contraseña incorrectos.");
+      setError("Identificador o contraseña incorrectos.");
     } finally {
       setSubmitting(false);
     }
@@ -932,15 +1094,26 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {mode === "register" && (
-          <input placeholder="Nombre completo" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+          <>
+            <input placeholder="Nombre completo (opcional)" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+            <input placeholder="Nombre de usuario (requerido)" value={username} onChange={(e) => setUsername(e.target.value)} style={inputStyle} />
+            <input placeholder="Teléfono (opcional)" value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
+            <input placeholder="Correo electrónico (opcional)" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} style={inputStyle} />
+            <div style={{ fontSize: 11, color: "#6a6a6a", marginTop: -2, marginBottom: 10 }}>
+              Deja el correo vacío para crear una cuenta local sin usar Supabase.
+            </div>
+          </>
         )}
-        <input placeholder="Correo electrónico" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
+        {mode === "login" && (
+          <input placeholder="Usuario, teléfono o correo" value={identifier} onChange={(e) => setIdentifier(e.target.value)} style={inputStyle} />
+        )}
+        <div style={{ position: 'relative' }}>
+          <input type={showPassword ? 'text' : 'password'} placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} style={{ ...inputStyle, paddingRight: 90 }} />
+          <button onClick={() => setShowPassword(!showPassword)} style={{ position: 'absolute', right: 8, top: 6, height: 34, padding: '6px 10px', borderRadius: 8, border: '1px solid #e4e4e0', background: '#fff', cursor: 'pointer' }}>{showPassword ? 'Ocultar' : 'Mostrar'}</button>
+        </div>
         {mode === "register" && (
-          <div style={{ fontSize: 11, color: "#6a6a6a", marginTop: -2, marginBottom: 10 }}>
-            Deja el correo vacío para crear una cuenta local sin usar Supabase.
-          </div>
+          <input type="password" placeholder="Confirmar contraseña" value={passwordConfirm} onChange={(e) => setPasswordConfirm(e.target.value)} style={inputStyle} />
         )}
-        <input type="password" placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
         {mode === "register" && accountType === "visitor" && (
           <select value={visitorBranchId} onChange={(e) => setVisitorBranchId(e.target.value)} style={inputStyle}>
             <option value="">Selecciona una rama para observar</option>
@@ -1246,6 +1419,7 @@ function buildAnniversaries(members, year) {
 function CalendarView({ events, setEvents, branchId, session, members = [] }) {
   const [cursor, setCursor] = useState(new Date());
   const [showModal, setShowModal] = useState(null);
+  const [calendarView, setCalendarView] = useState('monthly'); // monthly, weekly, daily, annual
 
   const eventsByDate = useMemo(() => {
     const map = {};
@@ -1262,14 +1436,84 @@ function CalendarView({ events, setEvents, branchId, session, members = [] }) {
     return map;
   }, [eventsByDate, anniversariesByDate]);
 
+  const injectDefaultSundayEvents = (dateStr) => {
+    const d = new Date(dateStr);
+    if (d.getDay() !== 0) return [];
+    const defaults = [
+      { id: `default-santa-${dateStr}`, title: 'Santa Cena y sermones', time: '09:00-10:00', kind: 'service' },
+      { id: `default-escuela-${dateStr}`, title: 'Escuela Dominical', time: '10:00-11:00', kind: 'class' },
+    ];
+    const existing = combinedByDate[dateStr] || [];
+    return defaults.filter(def => !existing.some(e => e.title === def.title));
+  };
+
+  const renderMonth = () => (
+    <MonthGrid cursor={cursor} setCursor={setCursor} itemsByDate={combinedByDate} onDayClick={setShowModal}
+      renderItem={(ev) => (
+        <div style={{ fontSize: 10, background: ev.kind ? "#fbeaea" : "#e2f3e8", color: ev.kind ? "#8a4040" : "#1f5c3f", borderRadius: 4, padding: "2px 4px", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 3 }}>
+          {ev.kind && <Cake size={9} />} {ev.title}
+        </div>
+      )} />
+  );
+
+  const renderWeekly = () => {
+    const start = new Date(cursor);
+    const day = start.getDay();
+    start.setDate(start.getDate() - day);
+    const days = Array.from({length:7}).map((_,i)=>{ const d=new Date(start); d.setDate(start.getDate()+i); return d; });
+    return (
+      <div>
+        {days.map((d)=>{
+          const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+          const dayEvents = [...(combinedByDate[key] || []), ...injectDefaultSundayEvents(key)];
+          return (
+            <div key={key} style={{ border: '1px solid #e4e4e0', padding: 10, borderRadius: 8, marginBottom: 8 }}>
+              <div style={{ fontWeight: 600 }}>{d.toDateString()}</div>
+              {dayEvents.length === 0 && <div style={{ color: '#9a9a92' }}>Sin actividades</div>}
+              {dayEvents.map((ev)=> <div key={ev.id} style={{ marginTop: 6 }}>{ev.time ? `${ev.time} — ` : ''}{ev.title}</div>)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderDaily = () => {
+    const d = cursor;
+    const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    const dayEvents = [...(combinedByDate[key] || []), ...injectDefaultSundayEvents(key)];
+    return (
+      <div>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>{d.toDateString()}</div>
+        {dayEvents.length === 0 && <div style={{ color: '#9a9a92' }}>Sin actividades</div>}
+        {dayEvents.map((ev)=> <div key={ev.id} style={{ marginTop: 6 }}>{ev.time ? `${ev.time} — ` : ''}{ev.title}</div>)}
+      </div>
+    );
+  };
+
+  const renderAnnual = () => {
+    const year = cursor.getFullYear();
+    const counts = {};
+    Object.keys(combinedByDate).forEach((k)=>{ if (k.startsWith(String(year))) { const m = Number(k.split('-')[1]); counts[m] = (counts[m]||0) + (combinedByDate[k]||[]).length; } });
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>{Array.from({length:12}).map((_,i)=> <div key={i} style={{ border: '1px solid #e4e4e0', padding: 10, borderRadius: 8, minWidth:120 }}>{MONTHS[i]}<div style={{ fontSize: 18, fontWeight: 600 }}>{counts[i+1]||0}</div></div>)}</div>
+      </div>
+    );
+  };
+
   return (
     <div className="container-page" style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
-      <MonthGrid cursor={cursor} setCursor={setCursor} itemsByDate={combinedByDate} onDayClick={setShowModal}
-        renderItem={(ev) => (
-          <div style={{ fontSize: 10, background: ev.kind ? "#fbeaea" : "#e2f3e8", color: ev.kind ? "#8a4040" : "#1f5c3f", borderRadius: 4, padding: "2px 4px", marginTop: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 3 }}>
-            {ev.kind && <Cake size={9} />} {ev.title}
-          </div>
-        )} />
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+        <button onClick={() => setCalendarView('monthly')} style={calendarView==='monthly'?primaryBtn:secondaryBtn}>Mensual</button>
+        <button onClick={() => setCalendarView('weekly')} style={calendarView==='weekly'?primaryBtn:secondaryBtn}>Semanal</button>
+        <button onClick={() => setCalendarView('daily')} style={calendarView==='daily'?primaryBtn:secondaryBtn}>Diaria</button>
+        <button onClick={() => setCalendarView('annual')} style={calendarView==='annual'?primaryBtn:secondaryBtn}>Anual</button>
+      </div>
+      {calendarView === 'monthly' && renderMonth()}
+      {calendarView === 'weekly' && renderWeekly()}
+      {calendarView === 'daily' && renderDaily()}
+      {calendarView === 'annual' && renderAnnual()}
       {showModal && (
         <DayEventModal date={showModal} events={eventsByDate[showModal] || []} anniversaries={anniversariesByDate[showModal] || []}
           onClose={() => setShowModal(null)} session={session}
@@ -1419,7 +1663,7 @@ function nextSundays(count = 8) {
 
 function SpeakersView({ speakers, setSpeakers, branchId, session }) {
   const sundays = useMemo(() => nextSundays(8), []);
-  const SLOTS_PER_SUNDAY = 2;
+  const SLOTS_PER_SUNDAY = 6;
   const [nameInput, setNameInput] = useState("");
   const [pendingSlot, setPendingSlot] = useState(null);
   const branchSpeakers = speakers.filter((s) => s.branchId === branchId);
@@ -1466,11 +1710,12 @@ function SpeakersView({ speakers, setSpeakers, branchId, session }) {
 }
 
 function MembersView({ members, setMembers, branchId, session }) {
+  const [roles, setRoles] = useStore(STORAGE_KEYS.ROLES, CHURCH_ROLES);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: "", role: "Miembro", phone: "", birthDate: "", baptismDate: "" });
   const [linkToMe, setLinkToMe] = useState(false);
   const branchMembers = members.filter((m) => m.branchId === branchId);
-  const canAdd = isActiveSession(session);
+  const canAdd = session && session.role === "member";
   const canLinkSelf = session && session.role === "member";
 
   return (
@@ -1510,7 +1755,7 @@ function MembersView({ members, setMembers, branchId, session }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               <input placeholder="Nombre completo" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={inputStyle} />
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} style={inputStyle}>
-                {CHURCH_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                {roles.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
               <div>
                 <div style={{ fontSize: 11, color: "#767670", marginBottom: 3 }}>Cumpleaños (opcional)</div>
@@ -1893,7 +2138,7 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
             <img src={p.dataUrl} alt={p.caption} onClick={() => setSelectedPhoto(p)} style={{ width: "100%", height: 220, objectFit: "contain", background: "#f4f4f1", display: "block", cursor: "zoom-in" }} />
             <div style={{ padding: 8 }}>
               {p.caption && <div style={{ fontSize: 12 }}>{p.caption}</div>}
-              <div style={{ fontSize: 10, color: "#9a9a92" }}>{p.author}</div>
+              <div style={{ fontSize: 10, color: "#9a9a92" }}>{p.author} · {new Date(p.createdAt).toLocaleString()}</div>
             </div>
           </div>
         ))}
@@ -2484,6 +2729,9 @@ export default function App() {
   const [view, setView] = useState("directory");
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [session, setSession] = useState(null);
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try { return localStorage.getItem('seen_welcome') !== 'true'; } catch { return true; }
+  });
   const [authChecked, setAuthChecked] = useState(false);
   const accountsRef = useRef(accounts);
 
@@ -2668,6 +2916,10 @@ export default function App() {
         setView("directory");
       }}
         chatUnread={chatUnread} speakerGaps={speakerGaps} />
+
+      {showWelcome && (
+        <WelcomePage onClose={() => { try { localStorage.setItem('seen_welcome','true'); } catch {} setShowWelcome(false); }} />
+      )}
 
       {view === "login" && (
         <LoginView accounts={accounts} setAccounts={setAccounts} branches={branches}

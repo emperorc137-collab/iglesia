@@ -4,7 +4,7 @@ import {
   Trees, Users, Clock, ArrowLeft, MessageCircle, Image as ImageIcon, Droplet,
   Key, LogIn, LogOut, Send, Upload, UserCircle, Copy, Trash2, AlertCircle,
   Compass, Pencil, Network, ExternalLink, Globe, Download, Lock,
-  BookOpen, GitBranch, Cake, ArrowRightLeft, Filter, ShieldCheck, History,
+  BookOpen, GitBranch, Cake, ArrowRightLeft, Filter, ShieldCheck, History, Phone, Server,
 } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -23,6 +23,9 @@ const STORAGE_KEYS = {
   MISSIONARIES: "missionaries",
   COMPANIONSHIPS: "companionships",
   ADMIN_CODES: "admin_codes",
+  JOIN_REQUESTS: "join_requests",
+  PAIRS: "pairs",
+  TYPING_STATUSES: "typing_statuses",
   BRANCH_CREDENTIALS: "branch_credentials",
   WELCOME_PAGE: "welcome_page",
   ROLES: "roles",
@@ -31,7 +34,7 @@ const STORAGE_KEYS = {
 const SUPABASE_STORE_KEYS = new Set([
   STORAGE_KEYS.EVENTS, STORAGE_KEYS.SPEAKERS, STORAGE_KEYS.ORDINANCES, STORAGE_KEYS.MEMBERS,
   STORAGE_KEYS.PHOTOS, STORAGE_KEYS.MESSAGES, STORAGE_KEYS.MISSIONARIES,
-  STORAGE_KEYS.COMPANIONSHIPS, STORAGE_KEYS.ADMIN_CODES, STORAGE_KEYS.BRANCH_CREDENTIALS,
+  STORAGE_KEYS.COMPANIONSHIPS, STORAGE_KEYS.PAIRS, STORAGE_KEYS.ADMIN_CODES, STORAGE_KEYS.BRANCH_CREDENTIALS,
   STORAGE_KEYS.WELCOME_PAGE, STORAGE_KEYS.ROLES,
 ]);
 
@@ -117,11 +120,40 @@ function codePrefix(branchName) {
 function genInviteCode(branchName) {
   return `${codePrefix(branchName)}-${secureCode(6)}`;
 }
+function genRegistrationCode(type, branchName) {
+  const prefix = type === "member" ? "MEM" : type === "missionary" ? "MIS" : "ADM";
+  return `${prefix}-${codePrefix(branchName)}-${secureCode(6)}`;
+}
 function genMissionaryCode(branchName) {
   return `MIS-${codePrefix(branchName)}-${secureCode(6)}`;
 }
 function genVisitorCode(branchName) {
   return `VIS-${codePrefix(branchName)}-${secureCode(6)}`;
+}
+function findRegistrationCode(code, type, codes) {
+  if (!code || !codes) return null;
+  const upper = code.trim().toUpperCase();
+  return codes.find((c) => c.code === upper && !c.used && (!c.type || c.type === type));
+}
+function normalizeBranchCodes(branch) {
+  const next = { ...branch };
+  if (!next.memberCodes) {
+    next.memberCodes = next.inviteCode ? [{ type: "member", code: next.inviteCode.toUpperCase(), used: false, createdAt: next.createdAt || new Date().toISOString() }] : [];
+  } else if (next.memberCodes.length === 0 && next.inviteCode) {
+    next.memberCodes = [{ type: "member", code: next.inviteCode.toUpperCase(), used: false, createdAt: next.createdAt || new Date().toISOString() }];
+  }
+  if (!next.missionaryCodes) {
+    next.missionaryCodes = next.missionaryCode ? [{ type: "missionary", code: next.missionaryCode.toUpperCase(), used: false, createdAt: next.createdAt || new Date().toISOString() }] : [];
+  } else if (next.missionaryCodes.length === 0 && next.missionaryCode) {
+    next.missionaryCodes = [{ type: "missionary", code: next.missionaryCode.toUpperCase(), used: false, createdAt: next.createdAt || new Date().toISOString() }];
+  }
+  if (next.inviteCode && !next.memberCodes.some((c) => c.code === next.inviteCode.toUpperCase())) {
+    next.memberCodes.unshift({ type: "member", code: next.inviteCode.toUpperCase(), used: false, createdAt: next.createdAt || new Date().toISOString() });
+  }
+  if (next.missionaryCode && !next.missionaryCodes.some((c) => c.code === next.missionaryCode.toUpperCase())) {
+    next.missionaryCodes.unshift({ type: "missionary", code: next.missionaryCode.toUpperCase(), used: false, createdAt: next.createdAt || new Date().toISOString() });
+  }
+  return next;
 }
 function addMonths(date, months) {
   const d = new Date(date);
@@ -143,7 +175,7 @@ function monthsSince(dateStr) {
   return Math.max(0, months);
 }
 function isActiveSession(session) {
-  return !!session && session.active !== false;
+  return !!session && session.active !== false && session.role !== "visitor";
 }
 
 function authSessionToAccount(authSession, accounts = []) {
@@ -217,6 +249,14 @@ const GLOBAL_CSS = `
     .type-select-row { gap: 5px !important; }
     .code-grid { grid-template-columns: 1fr !important; }
   }
+  @keyframes typingDots {
+    0%, 20% { opacity: 0; }
+    50% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  .typing-dots span { animation: typingDots 1.4s infinite; }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
 `;
 
 function useStore(key, initial, shared = true) {
@@ -230,12 +270,23 @@ function useStore(key, initial, shared = true) {
     let mounted = true;
     (async () => {
       try {
-        // Si es branches, leer de Supabase
+        // Si es branches, leer de Supabase y mezclar con datos locales.
         if (key === "branches") {
+          const stored = localStorage.getItem(key);
+          const localBranches = stored ? JSON.parse(stored) : [];
           const { data, error } = await supabase.from("branches").select("*");
           if (error) throw error;
           if (mounted && data && data.length > 0) {
-            setValue(data.map((branch) => ({ ...seedBranch, ...branch })));
+            const merged = data.map((branch) => {
+              const local = localBranches.find((b) => b.id === branch.id);
+              return normalizeBranchCodes({ ...seedBranch, ...branch, ...local });
+            });
+            localBranches.forEach((local) => {
+              if (!merged.some((b) => b.id === local.id)) {
+                merged.push(normalizeBranchCodes(local));
+              }
+            });
+            setValue(merged);
           } else if (mounted && data && data.length === 0) {
             // Si no hay ramas, insertar la rama inicial
             const seedBranch = {
@@ -251,7 +302,7 @@ function useStore(key, initial, shared = true) {
               .from("branches")
               .insert([seedBranch])
               .select();
-              if (insertError) throw insertError;
+            if (insertError) throw insertError;
             if (mounted && inserted) setValue(inserted);
           }
         } else if (key === STORAGE_KEYS.ACCOUNTS) {
@@ -309,6 +360,8 @@ function useStore(key, initial, shared = true) {
             .upsert(filtered);
           if (error) throw error;
         }
+        localStorage.setItem(key, JSON.stringify(next));
+        return;
       } else if (key === STORAGE_KEYS.ACCOUNTS) {
         localStorage.setItem(key, JSON.stringify(next));
         const supabaseAccounts = next.filter((item) => item.email && item.email.trim() && !item.localOnly);
@@ -339,14 +392,19 @@ function useStore(key, initial, shared = true) {
   return [value, persist, loaded];
 }
 
-function BranchSymbol({ symbol = "tree", size = 48 }) {
+function BranchSymbol({ symbol = "tree", size = 48, color = "#1f5c3f", logoUrl }) {
   const Icon = symbol === "tree" ? Trees : Users;
   return (
     <div style={{
-      width: size, height: size, borderRadius: 12, background: "#1f5c3f",
+      width: size, height: size, borderRadius: 12, background: color,
       display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+      overflow: "hidden",
     }}>
-      <Icon size={size * 0.52} color="#0a0a0a" strokeWidth={2.2} />
+      {logoUrl ? (
+        <img src={logoUrl} alt="Logo de rama" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+      ) : (
+        <Icon size={size * 0.52} color="#0a0a0a" strokeWidth={2.2} />
+      )}
     </div>
   );
 }
@@ -601,7 +659,7 @@ function WelcomeView({ welcomePage, photos, onExplore, onLogin }) {
   );
 }
 
-function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps = 0 }) {
+function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps = 0, brandColor = "#1f5c3f" }) {
   const tabs = [
     { id: "welcome", label: "Inicio", icon: BookOpen },
     { id: "directory", label: "Directorio", icon: MapPin },
@@ -610,6 +668,7 @@ function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps 
     { id: "speakers", label: "Discursos", icon: Mic, badge: speakerGaps },
     { id: "members", label: "Miembros", icon: Users },
     { id: "missionaries", label: "Misioneros", icon: Compass },
+    { id: "timeline", label: "Línea de tiempo", icon: History },
     { id: "photos", label: "Fotos", icon: ImageIcon },
     { id: "chat", label: "Chat", icon: MessageCircle, badge: chatUnread },
   ];
@@ -662,7 +721,7 @@ function Header({ view, setView, session, onLogout, chatUnread = 0, speakerGaps 
   );
 }
 
-function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes, onLogin }) {
+function LoginView({ accounts, setAccounts, branches, setBranches, adminCodes, setAdminCodes, onLogin }) {
   const [mode, setMode] = useState("login");
   const [accountType, setAccountType] = useState("member");
   const [name, setName] = useState("");
@@ -706,27 +765,30 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
 
   const handleRegister = async () => {
     setError("");
-    const identifier = email.trim();
     const trimmedUsername = username.trim();
     const trimmedPhone = phone.trim();
+    const identifier = email.trim();
     const isEmail = isEmailValue(identifier);
-    const normalizedPhone = normalizePhone(identifier);
-    const isPhone = !isEmail && normalizedPhone.length >= 7;
     const isLocal = !isEmail;
 
-    if (!name || !password) { setError("Completa nombre y contraseña."); return; }
-    if (mode === "register" && password !== passwordConfirmation) { setError("Las contraseñas no coinciden."); return; }
-    if (!identifier && !trimmedUsername && !trimmedPhone) { setError("Indica correo, usuario o teléfono para tu cuenta."); return; }
+    // Invitados: solo usuario y contraseña. Todo lo demás: nombre obligatorio + usuario + contraseña,
+    // con correo y teléfono opcionales.
+    if (accountType === "visitor") {
+      if (!trimmedUsername || !password) { setError("Completa usuario y contraseña."); return; }
+    } else {
+      if (!name.trim() || !trimmedUsername || !password) { setError("Completa nombre, usuario y contraseña."); return; }
+    }
+    if (password !== passwordConfirmation) { setError("Las contraseñas no coinciden."); return; }
 
     const accountEmail = isEmail ? identifier.toLowerCase() : "";
-    const accountPhone = trimmedPhone || (isPhone ? identifier : "");
-    const accountUsername = trimmedUsername || (isEmail ? identifier.split("@")[0].toLowerCase() : (isPhone ? "" : identifier.toLowerCase()));
+    const accountPhone = trimmedPhone;
+    const accountUsername = trimmedUsername.toLowerCase();
 
-    if (!accountEmail && !accountUsername && !accountPhone) {
-      setError("Indica un correo, usuario o teléfono válido.");
+    if (!accountUsername) {
+      setError("Indica un nombre de usuario.");
       return;
     }
-    if (accountUsername && accounts.some((a) => a.username?.toLowerCase() === accountUsername.toLowerCase())) {
+    if (accounts.some((a) => a.username?.toLowerCase() === accountUsername)) {
       setError("Ese nombre de usuario ya está en uso. Elige otro.");
       return;
     }
@@ -767,7 +829,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
 
     const baseAccount = {
       id: uid(),
-      name,
+      name: name.trim() || accountUsername,
       email: accountEmail,
       username: accountUsername,
       phone: accountPhone,
@@ -917,16 +979,62 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
 
     if (!code) { setError("Ingresa el código asignado por las oficinas de tu rama."); return; }
     const upperCode = code.trim().toUpperCase();
-    const branch = branches.find((b) => b.status === "approved" && (
-      (accountType === "member" && b.inviteCode === upperCode) ||
-      (accountType === "missionary" && b.missionaryCode === upperCode) ||
-      (accountType === "visitor" && b.visitorCode === upperCode)
-    ));
+    let branch = null;
+    let registrationType = null;
+
+    if (accountType === "member") {
+      branch = branches.find((b) => {
+        if (b.status !== "approved") return false;
+        const arrayMatch = b.memberCodes?.some((c) => c.code === upperCode && !c.used);
+        const legacyMatch = b.inviteCode?.toUpperCase() === upperCode;
+        return !!arrayMatch || !!legacyMatch;
+      });
+      registrationType = "member";
+    } else if (accountType === "missionary") {
+      branch = branches.find((b) => {
+        if (b.status !== "approved") return false;
+        const arrayMatch = b.missionaryCodes?.some((c) => c.code === upperCode && !c.used);
+        const legacyMatch = b.missionaryCode?.toUpperCase() === upperCode;
+        return !!arrayMatch || !!legacyMatch;
+      });
+      registrationType = "missionary";
+    } else if (accountType === "visitor") {
+      branch = branches.find((b) => b.status === "approved" && b.visitorCode === upperCode);
+    }
+
     if (!branch) { setError("Código de invitación inválido para el tipo de cuenta seleccionado."); return; }
     if (accountType === "visitor" && branch.visitorCodeExpiresAt && new Date(branch.visitorCodeExpiresAt) < new Date()) {
       setError("Este código de visitante venció.");
       return;
     }
+
+    if (registrationType) {
+      const codesKey = registrationType === "member" ? "memberCodes" : "missionaryCodes";
+      const singularKey = registrationType === "member" ? "inviteCode" : "missionaryCode";
+      const nextBranches = branches.map((b) => {
+        if (b.id !== branch.id) return b;
+        const currentCodes = Array.isArray(b[codesKey]) ? b[codesKey] : [];
+        if (currentCodes.some((c) => c.code === upperCode && !c.used)) {
+          return {
+            ...b,
+            [codesKey]: currentCodes.map((c) => c.code === upperCode ? { ...c, used: true, usedBy: accountEmail || accountUsername || accountPhone || "local", usedAt: new Date().toISOString() } : c),
+          };
+        }
+        if (b[singularKey]?.toUpperCase() === upperCode) {
+          return {
+            ...b,
+            [codesKey]: [
+              ...currentCodes,
+              { type: registrationType, code: upperCode, used: true, usedBy: accountEmail || accountUsername || accountPhone || "local", usedAt: new Date().toISOString() },
+            ],
+          };
+        }
+        return b;
+      });
+      setBranches(nextBranches);
+      branch = nextBranches.find((b) => b.id === branch.id);
+    }
+
     const account = {
       ...baseAccount,
       branchId: branch.id,
@@ -1084,7 +1192,7 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
             <span>
               {accountType === "member" && "Necesitas el código de invitación de tu rama."}
               {accountType === "missionary" && "Necesitas el código de misioneros de tu rama."}
-              {accountType === "visitor" && "Puedes solicitar acceso como observador durante 3 meses."}
+              {accountType === "visitor" && "Solo necesitas crear un usuario y contraseña. Podrás observar como espectador durante 3 meses, sin escribir ni subir fotos."}
               {accountType === "admin" && "Necesitas un código de invitación emitido por el administrador de una rama ya aceptada en la red."}
             </span>
           </div>
@@ -1092,14 +1200,24 @@ function LoginView({ accounts, setAccounts, branches, adminCodes, setAdminCodes,
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {mode === "register" && (
-          <input placeholder="Nombre completo" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+        {mode === "login" && (
+          <input placeholder="Correo, usuario o teléfono" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
         )}
-        <input placeholder="Correo electrónico, usuario o teléfono" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
-        {mode === "register" && (
-          <div style={{ fontSize: 11, color: "#6a6a6a", marginTop: -2, marginBottom: 10 }}>
-            Deja el correo vacío para crear una cuenta local sin usar Supabase.
-          </div>
+        {mode === "register" && accountType === "visitor" && (
+          <>
+            <input placeholder="Nombre de usuario" value={username} onChange={(e) => setUsername(e.target.value)} style={inputStyle} />
+          </>
+        )}
+        {mode === "register" && accountType !== "visitor" && (
+          <>
+            <input placeholder="Nombre completo" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+            <input placeholder="Nombre de usuario" value={username} onChange={(e) => setUsername(e.target.value)} style={inputStyle} />
+            <input placeholder="Correo electrónico (opcional)" value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
+            <input placeholder="Teléfono (opcional)" value={phone} onChange={(e) => setPhone(e.target.value)} style={inputStyle} />
+            <div style={{ fontSize: 11, color: "#6a6a6a", marginTop: -2, marginBottom: 4 }}>
+              Si agregas un correo válido, tu cuenta quedará respaldada en línea. Si lo dejas vacío, será una cuenta local en este dispositivo.
+            </div>
+          </>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <input type={showPassword ? "text" : "password"} placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
@@ -1284,10 +1402,37 @@ function RequestBranchModal({ onClose, onSubmit, otherBranches }) {
   );
 }
 
-function BranchDetail({ branch, branches, events, ordinances, onBack, primaryBranchId, onGoMissionaries, onSelectBranch }) {
+function BranchDetail({ branch, branches, events, ordinances, onBack, branchId, onGoMissionaries, onSelectBranch, session, joinRequests, setJoinRequests }) {
   const branchEvents = events.filter((e) => e.branchId === branch.id);
   const serverBranch = branch.serverBranchId ? branches.find((b) => b.id === branch.serverBranchId) : null;
   const parentBranch = branch.parentBranchId ? branches.find((b) => b.id === branch.parentBranchId) : null;
+  const isBranchMember = session && session.branchId === branch.id && isActiveSession(session);
+  const isBranchAdmin = session && session.role === "admin" && session.branchId === branch.id;
+  const existingRequest = session && joinRequests.find((req) => req.branchId === branch.id && req.userId === session.id && req.status === "pending");
+
+  const handleRequestAccess = () => {
+    if (!session) return;
+    const request = {
+      id: uid(),
+      branchId: branch.id,
+      userId: session.id,
+      name: session.name,
+      email: session.email || "",
+      role: session.role,
+      message: `Solicito unirme a la rama ${branch.name}.`,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+    setJoinRequests([...joinRequests, request]);
+  };
+
+  const approveRequest = (requestId) => {
+    setJoinRequests(joinRequests.map((req) => req.id === requestId ? { ...req, status: "approved", reviewedAt: new Date().toISOString() } : req));
+  };
+
+  const rejectRequest = (requestId) => {
+    setJoinRequests(joinRequests.map((req) => req.id === requestId ? { ...req, status: "rejected", reviewedAt: new Date().toISOString() } : req));
+  };
 
   return (
     <div className="container-page" style={{ padding: 24, maxWidth: 700, margin: "0 auto" }}>
@@ -1295,7 +1440,7 @@ function BranchDetail({ branch, branches, events, ordinances, onBack, primaryBra
         <ArrowLeft size={14} /> Volver al directorio
       </button>
       <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 20 }}>
-        <BranchSymbol size={64} symbol={branch.symbol} />
+        <BranchSymbol size={64} symbol={branch.symbol} color={branch.themeColor || "#1f5c3f"} logoUrl={branch.logoUrl} />
         <div>
           <div style={{ fontSize: 20, fontWeight: 500, display: "flex", alignItems: "center", gap: 8 }}>
             {branch.name}
@@ -1304,6 +1449,11 @@ function BranchDetail({ branch, branches, events, ordinances, onBack, primaryBra
           <div style={{ fontSize: 13, color: "#767670" }}>{branch.location} · {branch.district}</div>
         </div>
       </div>
+      {branch.bannerUrl && (
+        <div style={{ width: "100%", height: 180, borderRadius: 16, overflow: "hidden", marginBottom: 18 }}>
+          <img src={branch.bannerUrl} alt={`${branch.name} banner`} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+        </div>
+      )}
       <div style={{ marginBottom: 8 }}>
         <NetworkMap branches={branches.filter((b) => b.status === "approved")} highlightId={branch.id} onSelect={onSelectBranch} />
       </div>
@@ -1323,9 +1473,9 @@ function BranchDetail({ branch, branches, events, ordinances, onBack, primaryBra
           </div>
         )}
       </div>
-      {branch.id === primaryBranchId && (
+      {isBranchMember && (
         <div className="card-item" onClick={onGoMissionaries} style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 14, marginBottom: 20, cursor: "pointer", display: "flex", alignItems: "center", gap: 10, background: "#fff" }}>
-          <Compass size={18} color="#1f5c3f" />
+          <Compass size={18} color={branch.themeColor || "#1f5c3f"} />
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 500, fontSize: 13 }}>Misioneros de esta rama</div>
             <div style={{ fontSize: 11, color: "#767670" }}>Perfiles, sectores y bautismos</div>
@@ -1335,6 +1485,42 @@ function BranchDetail({ branch, branches, events, ordinances, onBack, primaryBra
       )}
       <div style={{ fontWeight: 500, fontSize: 14, marginBottom: 10 }}>Próximas actividades</div>
       {branchEvents.length === 0 && <div style={{ fontSize: 13, color: "#9a9a92" }}>Sin actividades programadas.</div>}
+      {session && !isBranchMember && !existingRequest && branch.status === "approved" && (
+        <div style={{ marginTop: 20, border: "1px solid #e4e4e0", borderRadius: 12, padding: 14, background: "#fff" }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 8 }}>Solicitar acceso a esta rama</div>
+          <div style={{ fontSize: 12, color: "#767670", marginBottom: 10 }}>Envía una solicitud al administrador de la rama para que revise tu acceso.</div>
+          <button onClick={handleRequestAccess} className="btn-primary" style={{ ...primaryBtn, background: branch.themeColor || "#1f5c3f" }}>Enviar solicitud</button>
+        </div>
+      )}
+      {existingRequest && (
+        <div style={{ marginTop: 20, border: "1px solid #f1dede", borderRadius: 12, padding: 14, background: "#fff5f4" }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 6 }}>Solicitud enviada</div>
+          <div style={{ fontSize: 12, color: "#8a4040" }}>Tu solicitud está en revisión. El administrador de la rama la verá pronto.</div>
+        </div>
+      )}
+      {isBranchAdmin && (
+        <div style={{ marginTop: 20, border: "1px solid #e4e4e0", borderRadius: 12, padding: 14, background: "#fff" }}>
+          <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 10 }}>Solicitudes de acceso</div>
+          {joinRequests.filter((req) => req.branchId === branch.id).length === 0 ? (
+            <div style={{ fontSize: 12, color: "#767670" }}>No hay solicitudes pendientes.</div>
+          ) : joinRequests.filter((req) => req.branchId === branch.id).map((req) => (
+            <div key={req.id} style={{ borderTop: "1px solid #eef1ee", paddingTop: 10, marginTop: 10 }}>
+              <div style={{ fontWeight: 500 }}>{req.name}</div>
+              <div style={{ fontSize: 11, color: "#767670" }}>{req.email || req.role}</div>
+              <div style={{ fontSize: 11, margin: "6px 0" }}>{req.message}</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {req.status === "pending" && (
+                  <>
+                    <button onClick={() => approveRequest(req.id)} className="btn-primary" style={{ ...primaryBtn, fontSize: 11, padding: "6px 8px" }}>Aprobar</button>
+                    <button onClick={() => rejectRequest(req.id)} className="btn-secondary" style={{ ...secondaryBtn, fontSize: 11, padding: "6px 8px" }}>Rechazar</button>
+                  </>
+                )}
+                <Badge tone={req.status === "approved" ? "approved" : req.status === "rejected" ? "muted" : "pending"}>{req.status}</Badge>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
       {branchEvents.map((ev) => (
         <div key={ev.id} style={{ border: "1px solid #e4e4e0", borderRadius: 8, padding: 10, marginBottom: 8, fontSize: 13 }}>
           <div style={{ fontWeight: 500 }}>{ev.title}</div>
@@ -1439,7 +1625,7 @@ function buildYearOverview(itemsByDate) {
   return months;
 }
 
-function CalendarView({ events, setEvents, branchId, session, members = [], ordinances = [] }) {
+function CalendarView({ events, setEvents, branchId, session, members = [], ordinances = [], setOrdinances }) {
   const [cursor, setCursor] = useState(new Date());
   const [showModal, setShowModal] = useState(null);
   const [viewMode, setViewMode] = useState("month");
@@ -1762,6 +1948,19 @@ function MembersView({ members, setMembers, branchId, session, roles }) {
   const branchMembers = members.filter((m) => m.branchId === branchId);
   const canAdd = isActiveSession(session);
   const canLinkSelf = session && session.role === "member";
+  const canView = session && session.branchId === branchId && ["member", "missionary", "admin"].includes(session.role);
+
+  if (!canView) {
+    return (
+      <div className="container-page" style={{ padding: 40, maxWidth: 480, margin: "0 auto", textAlign: "center" }}>
+        <Lock size={26} color="#1f5c3f" style={{ marginBottom: 10 }} />
+        <div style={{ fontWeight: 500, marginBottom: 6 }}>Directorio de miembros</div>
+        <div style={{ fontSize: 13, color: "#767670" }}>
+          Esta sección es solo para miembros de la rama. Inicia sesión con una cuenta de miembro, misionero o admin de esta rama para verla.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="container-page" style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
@@ -1773,11 +1972,6 @@ function MembersView({ members, setMembers, branchId, session, roles }) {
           </button>
         )}
       </div>
-      {!session && (
-        <div style={{ fontSize: 12, color: "#767670", marginBottom: 16, display: "flex", gap: 6 }}>
-          <AlertCircle size={14} /> Inicia sesión con el código de tu rama para agregar miembros.
-        </div>
-      )}
       <div className="card-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
         {branchMembers.map((m) => (
           <div key={m.id} className="card-item" style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 14, display: "flex", gap: 10, alignItems: "center" }}>
@@ -1895,7 +2089,8 @@ function MissionaryTimeline({ missionary, isOwner, onAddEntry }) {
   );
 }
 
-function MissionaryCard({ m, isOwner, isReplaced, onAddEntry }) {
+function MissionaryCard({ m, photos, isOwner, isReplaced, onAddEntry }) {
+  const linkedPhotos = photos.filter((p) => p.missionaryId === m.id && p.status === "approved");
   return (
     <div className="card-item" style={{ border: "1px solid " + (isReplaced ? "#f1dede" : "#e4e4e0"), borderRadius: 14, padding: 14, background: isReplaced ? "#fdfaf9" : "#fff", display: "flex", flexDirection: "column", gap: 4 }}>
       <div style={{ display: "flex", gap: 12 }}>
@@ -1916,8 +2111,24 @@ function MissionaryCard({ m, isOwner, isReplaced, onAddEntry }) {
             {isReplaced && <Badge tone="muted"><Lock size={9} style={{ verticalAlign: -1, marginRight: 3 }} />Reemplazado</Badge>}
           </div>
           {m.description && <div style={{ fontSize: 12, color: "#334033", marginTop: 6 }}>{m.description}</div>}
+          {m.phone && (
+            <div style={{ fontSize: 11, color: "#1f5c3f", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
+              <Phone size={10} /> {m.phone}
+            </div>
+          )}
         </div>
       </div>
+      {linkedPhotos.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "#1f5c3f", marginBottom: 6 }}>Fotos vinculadas</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {linkedPhotos.slice(0, 3).map((photo) => (
+              <img key={photo.id} src={photo.dataUrl} alt={photo.caption || m.name} style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 10, border: "1px solid #e4e4e0" }} />
+            ))}
+            {linkedPhotos.length > 3 && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 80, height: 80, borderRadius: 10, border: "1px solid #e4e4e0", background: "#f7f7f5", fontSize: 11, color: "#767670" }}>+{linkedPhotos.length - 3}</div>}
+          </div>
+        </div>
+      )}
       <MissionaryTimeline missionary={m} isOwner={isOwner} onAddEntry={onAddEntry} />
     </div>
   );
@@ -1955,7 +2166,7 @@ function CompanionshipHeader({ companionship, canEdit, onSave }) {
 
 function MissionaryProfileModal({ initial, branchId, accountId, companionships, onClose, onSave }) {
   const [form, setForm] = useState(initial || {
-    name: "", gender: "Élder", age: "", hometown: "", startDate: "", description: "", photo: null,
+    name: "", gender: "Élder", age: "", hometown: "", startDate: "", description: "", photo: null, phone: "",
   });
   const [companionshipChoice, setCompanionshipChoice] = useState(initial?.companionshipId || (companionships[0]?.id || "__new__"));
   const [newCompName, setNewCompName] = useState("");
@@ -2004,6 +2215,7 @@ function MissionaryProfileModal({ initial, branchId, accountId, companionships, 
             <input type="number" placeholder="Edad" value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value })} style={{ ...inputStyle, width: 90 }} />
           </div>
           <input placeholder="Ciudad / país de origen" value={form.hometown} onChange={(e) => setForm({ ...form, hometown: e.target.value })} style={inputStyle} />
+          <input placeholder="Teléfono (visible públicamente)" value={form.phone || ""} onChange={(e) => setForm({ ...form, phone: e.target.value })} style={inputStyle} />
           <div>
             <div style={{ fontSize: 11, color: "#767670", marginBottom: 3 }}>Fecha en que inició su misión</div>
             <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} style={inputStyle} />
@@ -2031,13 +2243,17 @@ function MissionaryProfileModal({ initial, branchId, accountId, companionships, 
   );
 }
 
-function MissionariesView({ missionaries, setMissionaries, companionships, setCompanionships, session, primaryBranchId }) {
+function MissionariesView({ missionaries, setMissionaries, companionships, setCompanionships, photos, session, branchId, pairs, setPairs }) {
   const [showModal, setShowModal] = useState(false);
-  const branchMissionaries = missionaries.filter((m) => m.branchId === primaryBranchId);
-  const branchCompanionships = companionships.filter((c) => c.branchId === primaryBranchId);
+  const [showPairForm, setShowPairForm] = useState(false);
+  const branchMissionaries = missionaries.filter((m) => m.branchId === branchId);
+  const branchCompanionships = companionships.filter((c) => c.branchId === branchId);
+  const branchPhotos = photos.filter((p) => p.branchId === branchId && p.status === "approved");
+  const branchPairs = pairs.filter((p) => p.branchId === branchId);
   const myProfile = session ? branchMissionaries.find((m) => m.accountId === session.id) : null;
-  const isMissionary = session && session.role === "missionary" && session.branchId === primaryBranchId;
+  const isMissionary = session && session.role === "missionary" && session.branchId === branchId;
   const canEditProfile = isMissionary && isActiveSession(session);
+  const canManagePairs = session && session.branchId === branchId && (session.role === "admin" || session.role === "missionary");
 
   const grouped = useMemo(() => {
     const map = {};
@@ -2049,11 +2265,24 @@ function MissionariesView({ missionaries, setMissionaries, companionships, setCo
     return map;
   }, [branchMissionaries]);
 
+  const unpairedMissionaries = useMemo(() => {
+    const pairedIds = new Set(branchPairs.flatMap((pair) => [pair.missionaryAId, pair.missionaryBId].filter(Boolean)));
+    return branchMissionaries.filter((m) => !pairedIds.has(m.id));
+  }, [branchMissionaries, branchPairs]);
+
+  const pairOptions = branchMissionaries.map((m) => ({ id: m.id, name: m.name }));
+
   const saveMissionary = (missionary, newCompanionship) => {
     if (newCompanionship) setCompanionships([...companionships, newCompanionship]);
     const exists = missionaries.find((m) => m.id === missionary.id);
     setMissionaries(exists ? missionaries.map((m) => (m.id === missionary.id ? missionary : m)) : [...missionaries, missionary]);
     setShowModal(false);
+  };
+
+  const savePair = (pair) => {
+    const exists = pairs.find((p) => p.id === pair.id);
+    setPairs(exists ? pairs.map((p) => (p.id === pair.id ? pair : p)) : [...pairs, pair]);
+    setShowPairForm(false);
   };
 
   const addTimelineEntry = (missionaryId, entry) => {
@@ -2068,12 +2297,41 @@ function MissionariesView({ missionaries, setMissionaries, companionships, setCo
     <div className="container-page" style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontWeight: 500, fontSize: 16 }}>Misioneros de la rama</div>
-        {isMissionary && canEditProfile && (
-          <button onClick={() => setShowModal(true)} className="btn-primary" style={{ ...primaryBtn, display: "flex", alignItems: "center", gap: 6 }}>
-            <Pencil size={13} /> {myProfile ? "Editar mi perfil" : "Crear mi perfil"}
-          </button>
-        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {isMissionary && canEditProfile && (
+            <button onClick={() => setShowModal(true)} className="btn-primary" style={{ ...primaryBtn, display: "flex", alignItems: "center", gap: 6 }}>
+              <Pencil size={13} /> {myProfile ? "Editar mi perfil" : "Crear mi perfil"}
+            </button>
+          )}
+          {canManagePairs && unpairedMissionaries.length >= 2 && (
+            <button onClick={() => setShowPairForm(true)} className="btn-secondary" style={{ ...secondaryBtn, display: "flex", alignItems: "center", gap: 6 }}>
+              <Users size={13} /> Asignar pareja
+            </button>
+          )}
+        </div>
       </div>
+      {branchPairs.length > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: "#1f5c3f", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+            <History size={13} /> Parejas de esta rama
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {branchPairs.slice().sort((a, b) => (b.startDate || "").localeCompare(a.startDate || "")).map((pair) => {
+              const mA = branchMissionaries.find((mm) => mm.id === pair.missionaryAId);
+              const mB = branchMissionaries.find((mm) => mm.id === pair.missionaryBId);
+              return (
+                <div key={pair.id} style={{ border: "1px solid #e4e4e0", borderRadius: 10, padding: 10, fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <strong>{mA?.name || "?"}</strong> &amp; <strong>{mB?.name || "?"}</strong>
+                    <div style={{ color: "#767670", fontSize: 11 }}>{pair.startDate || "—"} → {pair.endDate || "presente"}</div>
+                  </div>
+                  <Badge tone={pair.endDate ? "muted" : "approved"}>{pair.endDate ? "Tramo cerrado" : "Activa"} · {pair.baptisms || 0} bautismos</Badge>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {!session && (
         <div style={{ fontSize: 12, color: "#767670", marginBottom: 16, display: "flex", gap: 6 }}>
           <AlertCircle size={14} /> Los misioneros inician sesión con su código especial para crear su perfil.
@@ -2098,7 +2356,7 @@ function MissionariesView({ missionaries, setMissionaries, companionships, setCo
             )}
             <div className="card-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
               {group.map((m) => (
-                <MissionaryCard key={m.id} m={m} isOwner={session && session.id === m.accountId && isActiveSession(session)}
+                <MissionaryCard key={m.id} m={m} photos={branchPhotos} isOwner={session && session.id === m.accountId && isActiveSession(session)}
                   isReplaced={m.accountActive === false} onAddEntry={(entry) => addTimelineEntry(m.id, entry)} />
               ))}
             </div>
@@ -2106,18 +2364,216 @@ function MissionariesView({ missionaries, setMissionaries, companionships, setCo
         );
       })}
       {showModal && (
-        <MissionaryProfileModal initial={myProfile} branchId={primaryBranchId} accountId={session.id} companionships={branchCompanionships}
+        <MissionaryProfileModal initial={myProfile} branchId={branchId} accountId={session.id} companionships={branchCompanionships}
           onClose={() => setShowModal(false)} onSave={saveMissionary} />
+      )}
+      {showPairForm && (
+        <MissionaryPairModal
+          pair={null}
+          missionarios={unpairedMissionaries.length >= 2 ? unpairedMissionaries : branchMissionaries}
+          onClose={() => setShowPairForm(false)}
+          onSave={(pair) => savePair({ ...pair, id: pair.id || uid(), branchId, createdAt: new Date().toISOString() })}
+        />
       )}
     </div>
   );
 }
 
-function PhotosView({ photos, setPhotos, branchId, session }) {
+function MissionaryPairModal({ pair, missionarios, onClose, onSave }) {
+  const [missionaryA, setMissionaryA] = useState(pair?.missionaryAId || "");
+  const [missionaryB, setMissionaryB] = useState(pair?.missionaryBId || "");
+  const [startDate, setStartDate] = useState(pair?.startDate || new Date().toISOString().slice(0, 10));
+  const [endDate, setEndDate] = useState(pair?.endDate || "");
+  const [notes, setNotes] = useState(pair?.notes || "");
+  const [baptisms, setBaptisms] = useState(pair?.baptisms || 0);
+
+  const handleSave = () => {
+    if (!missionaryA || !missionaryB || missionaryA === missionaryB) return;
+    onSave({
+      ...pair,
+      missionaryAId: missionaryA,
+      missionaryBId: missionaryB,
+      startDate,
+      endDate,
+      notes,
+      baptisms: Number(baptisms),
+    });
+  };
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal-dialog" style={{ maxWidth: 520 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Nuevo segmento de pareja</div>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18 }}>×</button>
+        </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <label style={{ fontSize: 12, color: "#334033" }}>
+            Misionero A
+            <select value={missionaryA} onChange={(e) => setMissionaryA(e.target.value)} style={inputStyle}>
+              <option value="">Selecciona misionero</option>
+              {missionarios.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </label>
+          <label style={{ fontSize: 12, color: "#334033" }}>
+            Misionero B
+            <select value={missionaryB} onChange={(e) => setMissionaryB(e.target.value)} style={inputStyle}>
+              <option value="">Selecciona misionero</option>
+              {missionarios.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </label>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <label style={{ flex: 1, fontSize: 12, color: "#334033" }}>
+              Inicio
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} style={inputStyle} />
+            </label>
+            <label style={{ flex: 1, fontSize: 12, color: "#334033" }}>
+              Fin
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} style={inputStyle} />
+            </label>
+          </div>
+          <label style={{ fontSize: 12, color: "#334033" }}>
+            Notas
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} style={{ ...inputStyle, minHeight: 90 }} />
+          </label>
+          <label style={{ fontSize: 12, color: "#334033" }}>
+            Bautismos
+            <input type="number" min="0" value={baptisms} onChange={(e) => setBaptisms(e.target.value)} style={inputStyle} />
+          </label>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 }}>
+            <button onClick={onClose} className="btn-secondary" style={{ ...secondaryBtn, minWidth: 100 }}>Cancelar</button>
+            <button onClick={handleSave} className="btn-primary" style={{ ...primaryBtn, minWidth: 100 }}>Guardar pareja</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NetworkPairsTimeline({ pairs, missionaries, branches, photos }) {
+  const [branchFilter, setBranchFilter] = useState("");
+  const [expandedId, setExpandedId] = useState(null);
+
+  const missionaryById = useMemo(() => {
+    const map = {};
+    missionaries.forEach((m) => { map[m.id] = m; });
+    return map;
+  }, [missionaries]);
+
+  const branchById = useMemo(() => {
+    const map = {};
+    branches.forEach((b) => { map[b.id] = b; });
+    return map;
+  }, [branches]);
+
+  const enrichedPairs = useMemo(() => {
+    return pairs
+      .filter((p) => !branchFilter || p.branchId === branchFilter)
+      .map((p) => {
+        const mA = missionaryById[p.missionaryAId];
+        const mB = missionaryById[p.missionaryBId];
+        const linkedPhotos = photos.filter((ph) =>
+          ph.status === "approved" && ph.branchId === p.branchId &&
+          (ph.companionshipId === p.id || ph.missionaryId === p.missionaryAId || ph.missionaryId === p.missionaryBId) &&
+          (!ph.createdAt || !p.startDate || ph.createdAt.slice(0, 10) >= p.startDate) &&
+          (!p.endDate || !ph.createdAt || ph.createdAt.slice(0, 10) <= p.endDate)
+        );
+        return { ...p, mA, mB, linkedPhotos, branch: branchById[p.branchId] };
+      })
+      .sort((a, b) => (b.startDate || "").localeCompare(a.startDate || ""));
+  }, [pairs, branchFilter, missionaryById, branchById, photos]);
+
+  return (
+    <div className="container-page" style={{ padding: 24, maxWidth: 760, margin: "0 auto" }}>
+      <div style={{ fontWeight: 500, fontSize: 16, marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+        <History size={17} color="#1f5c3f" /> Línea de tiempo de parejas — toda la red
+      </div>
+      <div style={{ fontSize: 12, color: "#767670", marginBottom: 16 }}>
+        Cada tramo representa el tiempo que dos misioneros sirvieron juntos como pareja, en cualquier rama de la red.
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <select value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)} style={inputStyle}>
+          <option value="">Todas las ramas</option>
+          {branches.filter((b) => b.status === "approved").map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select>
+      </div>
+
+      {enrichedPairs.length === 0 && (
+        <div style={{ color: "#9a9a92", fontSize: 13, textAlign: "center", padding: 30 }}>Aún no hay parejas registradas en la red.</div>
+      )}
+
+      <div style={{ position: "relative", paddingLeft: 24 }}>
+        {enrichedPairs.length > 0 && (
+          <div style={{ position: "absolute", left: 7, top: 6, bottom: 6, width: 2, background: "#e4e4e0" }} />
+        )}
+        {enrichedPairs.map((pair) => {
+          const isOpen = expandedId === pair.id;
+          const isActive = !pair.endDate;
+          return (
+            <div key={pair.id} style={{ position: "relative", marginBottom: 18 }}>
+              <div style={{
+                position: "absolute", left: -24 + 2, top: 4, width: 14, height: 14, borderRadius: "50%",
+                background: isActive ? "#1f5c3f" : "#b8c9bc", border: "3px solid #fff", boxShadow: "0 0 0 2px " + (isActive ? "#1f5c3f" : "#e4e4e0"),
+              }} />
+              <div className="card-item" onClick={() => setExpandedId(isOpen ? null : pair.id)}
+                style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 14, cursor: "pointer", background: "#fff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 500, fontSize: 14 }}>
+                      {pair.mA ? `${pair.mA.gender === "Hermana" ? "Hermana" : "Élder"} ${pair.mA.name}` : "Misionero A"}
+                      {" & "}
+                      {pair.mB ? `${pair.mB.gender === "Hermana" ? "Hermana" : "Élder"} ${pair.mB.name}` : "Misionero B"}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#767670", marginTop: 2 }}>
+                      {pair.branch?.name || "Rama desconocida"} · {pair.startDate || "—"} → {pair.endDate || "presente"}
+                    </div>
+                  </div>
+                  <Badge tone={isActive ? "approved" : "muted"}>
+                    <Droplet size={10} style={{ verticalAlign: -1, marginRight: 3 }} />{pair.baptisms || 0} bautismos
+                  </Badge>
+                </div>
+                {isOpen && (
+                  <div style={{ marginTop: 12, borderTop: "1px solid #eef1ee", paddingTop: 10 }}>
+                    {pair.notes && <div style={{ fontSize: 12, color: "#334033", marginBottom: 10 }}>{pair.notes}</div>}
+                    {!isActive && (
+                      <div style={{ fontSize: 11, color: "#767670", marginBottom: 10 }}>
+                        Tramo cerrado{pair.closedReason === "reemplazo" ? " por reemplazo de uno de los misioneros." : pair.closedReason === "fin_de_servicio" ? " por fin de servicio." : "."}
+                      </div>
+                    )}
+                    {pair.linkedPhotos.length > 0 ? (
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        {pair.linkedPhotos.map((ph) => (
+                          <div key={ph.id} style={{ width: 100 }}>
+                            <img src={ph.dataUrl} alt={ph.baptizedName || ph.caption || "bautizado"} style={{ width: 100, height: 100, objectFit: "cover", borderRadius: 10, border: "1px solid #e4e4e0" }} />
+                            {ph.baptizedName && <div style={{ fontSize: 10, fontWeight: 500, marginTop: 4 }}>{ph.baptizedName}</div>}
+                            {ph.baptismDate && <div style={{ fontSize: 10, color: "#767670" }}>{ph.baptismDate}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: "#9a9a92" }}>Sin fotos de bautizados vinculadas a este tramo.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PhotosView({ photos, setPhotos, branchId, session, missionaries }) {
   const [caption, setCaption] = useState("");
+  const [baptizedName, setBaptizedName] = useState("");
+  const [baptismDate, setBaptismDate] = useState("");
+  const [selectedMissionaryId, setSelectedMissionaryId] = useState("");
   const [preview, setPreview] = useState(null);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
   const fileRef = useRef(null);
+  const branchMissionaries = missionaries.filter((m) => m.branchId === branchId);
   const approved = photos.filter((p) => p.branchId === branchId && p.status === "approved");
 
   const handleFile = (e) => {
@@ -2142,9 +2598,26 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
 
   const submit = () => {
     if (!preview) return;
-    setPhotos([...photos, { id: uid(), branchId, dataUrl: preview, caption, status: "pending", author: session.name, createdAt: new Date().toISOString() }]);
+    const missionary = branchMissionaries.find((m) => m.id === selectedMissionaryId);
+    setPhotos([...photos, {
+      id: uid(),
+      branchId,
+      dataUrl: preview,
+      caption,
+      status: "pending",
+      author: session.name,
+      createdAt: new Date().toISOString(),
+      missionaryId: missionary?.id || null,
+      missionaryName: missionary?.name || null,
+      companionshipId: missionary?.companionshipId || null,
+      baptizedName: baptizedName.trim() || null,
+      baptismDate: baptismDate || null,
+    }]);
     setPreview(null);
     setCaption("");
+    setBaptizedName("");
+    setBaptismDate("");
+    setSelectedMissionaryId("");
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -2165,7 +2638,20 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
       {isActiveSession(session) ? (
         <div style={{ border: "1px dashed #b8c9bc", borderRadius: 12, padding: 16, marginBottom: 20 }}>
           <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ fontSize: 12, marginBottom: 10 }} />
+          {branchMissionaries.length > 0 && (
+            <select value={selectedMissionaryId} onChange={(e) => setSelectedMissionaryId(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }}>
+              <option value="">Vincular foto a un misionero (opcional)</option>
+              {branchMissionaries.map((m) => (
+                <option key={m.id} value={m.id}>{m.name} ({m.gender})</option>
+              ))}
+            </select>
+          )}
           {preview && <img src={preview} alt="preview" style={{ maxWidth: "100%", maxHeight: 200, borderRadius: 8, display: "block", marginBottom: 10 }} />}
+          <input placeholder="Nombre del bautizado (opcional)" value={baptizedName} onChange={(e) => setBaptizedName(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }} />
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 11, color: "#767670", marginBottom: 3 }}>Fecha del bautismo</div>
+            <input type="date" value={baptismDate} onChange={(e) => setBaptismDate(e.target.value)} style={inputStyle} />
+          </div>
           <input placeholder="Descripción (opcional)" value={caption} onChange={(e) => setCaption(e.target.value)} style={{ ...inputStyle, marginBottom: 10 }} />
           <button onClick={submit} disabled={!preview} className="btn-primary" style={{ ...primaryBtn, display: "flex", alignItems: "center", gap: 6, opacity: preview ? 1 : 0.5 }}>
             <Upload size={14} /> Enviar para aprobación
@@ -2182,7 +2668,9 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
           <div key={p.id} style={{ border: "1px solid #e4e4e0", borderRadius: 12, overflow: "hidden" }}>
             <img src={p.dataUrl} alt={p.caption} onClick={() => setSelectedPhoto(p)} style={{ width: "100%", height: 220, objectFit: "contain", background: "#f4f4f1", display: "block", cursor: "zoom-in" }} />
             <div style={{ padding: 8 }}>
+              {p.baptizedName && <div style={{ fontSize: 12, fontWeight: 500 }}>{p.baptizedName}{p.baptismDate ? ` — ${p.baptismDate}` : ""}</div>}
               {p.caption && <div style={{ fontSize: 12 }}>{p.caption}</div>}
+              {p.missionaryName && <div style={{ fontSize: 11, color: "#1f5c3f", marginBottom: 4 }}>Foto vinculada a {p.missionaryName}</div>}
               <div style={{ fontSize: 10, color: "#9a9a92" }}>{p.author}</div>
             </div>
           </div>
@@ -2198,12 +2686,32 @@ function PhotosView({ photos, setPhotos, branchId, session }) {
   );
 }
 
-function ChatView({ messages, setMessages, branchId, session }) {
+function ChatView({ messages, setMessages, branchId, session, typingStatuses, setTypingStatuses }) {
   const [text, setText] = useState("");
   const branchMessages = messages.filter((m) => m.branchId === branchId);
+  const activeTyping = typingStatuses.filter((status) => status.branchId === branchId && status.userId !== session?.id && status.active);
   const endRef = useRef(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [branchMessages.length]);
+
+  useEffect(() => {
+    if (!session || !isActiveSession(session)) return;
+    const active = text.trim().length > 0;
+    setTypingStatuses((prev) => {
+      const existing = prev.find((s) => s.userId === session.id && s.branchId === branchId);
+      if (existing) {
+        return prev.map((s) => s.userId === session.id && s.branchId === branchId ? { ...s, active, updatedAt: new Date().toISOString() } : s);
+      }
+      return [...prev, { id: uid(), branchId, userId: session.id, name: session.name, active, updatedAt: new Date().toISOString() }];
+    });
+  }, [text, session, branchId, setTypingStatuses]);
+
+  const formatTime = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
 
   if (!session) {
     return (
@@ -2233,9 +2741,24 @@ function ChatView({ messages, setMessages, branchId, session }) {
                 color: m.author === session.name ? "#fff" : "#334033",
                 padding: "8px 12px", borderRadius: 12, fontSize: 13,
               }}>{m.text}</div>
+              <div style={{ fontSize: 9, color: "#9a9a92", marginTop: 2, textAlign: m.author === session.name ? "right" : "left" }}>
+                {formatTime(m.createdAt)}
+              </div>
             </div>
           ))}
           {branchMessages.length === 0 && <div style={{ color: "#9a9a92", fontSize: 13, textAlign: "center", marginTop: 20 }}>Sé el primero en escribir.</div>}
+          {activeTyping.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 2 }}>
+              {activeTyping.map((status) => (
+                <div key={status.id || status.userId} style={{ fontSize: 11, color: "#767670", display: "flex", alignItems: "center", gap: 3 }}>
+                  {status.name}
+                  <span className="typing-dots" style={{ display: "inline-flex", gap: 1 }}>
+                    <span>.</span><span>.</span><span>.</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
           <div ref={endRef} />
         </div>
         <div style={{ display: "flex", gap: 8, padding: 10, borderTop: "1px solid #e4e4e0" }}>
@@ -2392,6 +2915,105 @@ function SiteConfigCard({ myBranch, branches, setBranches }) {
           </a>
         </div>
       )}
+    </div>
+  );
+}
+
+function BrandingConfigCard({ myBranch, branches, setBranches }) {
+  const [themeColor, setThemeColor] = useState(myBranch.themeColor || "#1f5c3f");
+  const [logoUrl, setLogoUrl] = useState(myBranch.logoUrl || "");
+  const [bannerUrl, setBannerUrl] = useState(myBranch.bannerUrl || "");
+  const [saved, setSaved] = useState(false);
+  const logoRef = useRef(null);
+  const bannerRef = useRef(null);
+
+  const readAsCompressedImage = (file, maxDimension, quality, onDone) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        onDone(canvas.toDataURL("image/jpeg", quality));
+      };
+      image.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleLogoFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    readAsCompressedImage(file, 400, 0.9, setLogoUrl);
+  };
+
+  const handleBannerFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    readAsCompressedImage(file, 1600, 0.85, setBannerUrl);
+  };
+
+  const save = () => {
+    setBranches(branches.map((b) => (b.id === myBranch.id ? { ...b, themeColor, logoUrl, bannerUrl } : b)));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+
+  return (
+    <div style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 14, marginBottom: 20 }}>
+      <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+        <Pencil size={14} color="#1f5c3f" /> Personalización de tu rama
+      </div>
+      <div style={{ fontSize: 11, color: "#767670", marginBottom: 14 }}>
+        Solo puedes personalizar el logo, el banner y el color de tu página. El resto del sistema es común para toda la red.
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
+        <div style={{ flex: "1 1 200px" }}>
+          <div style={{ fontSize: 11, color: "#767670", marginBottom: 6 }}>Logo de la rama</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <BranchSymbol size={48} symbol={myBranch.symbol} color={themeColor} logoUrl={logoUrl} />
+            <input ref={logoRef} type="file" accept="image/*" onChange={handleLogoFile} style={{ fontSize: 11 }} />
+          </div>
+          {logoUrl && (
+            <button onClick={() => { setLogoUrl(""); if (logoRef.current) logoRef.current.value = ""; }} className="btn-secondary" style={{ ...secondaryBtn, fontSize: 10, padding: "4px 8px", marginTop: 6 }}>
+              Quitar logo
+            </button>
+          )}
+        </div>
+
+        <div style={{ flex: "1 1 200px" }}>
+          <div style={{ fontSize: 11, color: "#767670", marginBottom: 6 }}>Color de la página</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input type="color" value={themeColor} onChange={(e) => setThemeColor(e.target.value)} style={{ width: 48, height: 36, border: "1px solid #e4e4e0", borderRadius: 8, padding: 2, cursor: "pointer" }} />
+            <span style={{ fontSize: 12, color: "#334033" }}>{themeColor}</span>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <div style={{ fontSize: 11, color: "#767670", marginBottom: 6 }}>Banner de la página</div>
+        {bannerUrl && (
+          <div style={{ width: "100%", height: 120, borderRadius: 10, overflow: "hidden", marginBottom: 8 }}>
+            <img src={bannerUrl} alt="Banner preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input ref={bannerRef} type="file" accept="image/*" onChange={handleBannerFile} style={{ fontSize: 11 }} />
+          {bannerUrl && (
+            <button onClick={() => { setBannerUrl(""); if (bannerRef.current) bannerRef.current.value = ""; }} className="btn-secondary" style={{ ...secondaryBtn, fontSize: 10, padding: "4px 8px" }}>
+              Quitar banner
+            </button>
+          )}
+        </div>
+      </div>
+
+      <button onClick={save} className="btn-primary" style={{ ...primaryBtn, marginTop: 16, background: themeColor }}>
+        {saved ? "Guardado" : "Guardar personalización"}
+      </button>
     </div>
   );
 }
@@ -2568,7 +3190,7 @@ function RolesEditorCard({ roles, setRoles }) {
     </div>
   );}
 
-function AdminView({ branches, setBranches, speakers, photos, setPhotos, missionaries, setMissionaries, accounts, setAccounts, session, events, ordinances, members, companionships, messages, setMessages, branchCredentials, setBranchCredentials, welcomePage, setWelcomePage, roles, setRoles }) {
+function AdminView({ branches, setBranches, speakers, setSpeakers, photos, setPhotos, missionaries, setMissionaries, accounts, setAccounts, session, events, ordinances, members, companionships, messages, setMessages, branchCredentials, setBranchCredentials, welcomePage, setWelcomePage, roles, setRoles, pairs, setPairs }) {
   const [copiedCode, setCopiedCode] = useState(null);
   const [transferTarget, setTransferTarget] = useState(null);
   const [verification, setVerification] = useState({ status: "idle", message: "" });
@@ -2596,7 +3218,35 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
   const toggleMissionaryActive = (m) => {
     const account = accounts.find((a) => a.id === m.accountId);
     if (!account) return;
+    const willBeReplaced = account.active !== false; // va a pasar de activo -> reemplazado
     setAccounts(accounts.map((a) => (a.id === account.id ? { ...a, active: a.active === false ? true : false } : a)));
+    if (willBeReplaced) {
+      // Cierra el tramo de pareja abierto de este misionero (fin de servicio / reemplazo automático).
+      const today = new Date().toISOString().slice(0, 10);
+      setPairs(pairs.map((p) => {
+        if (p.branchId !== m.branchId) return p;
+        if (p.endDate) return p; // ya cerrado
+        if (p.missionaryAId === m.id || p.missionaryBId === m.id) {
+          return { ...p, endDate: today, closedReason: "reemplazo" };
+        }
+        return p;
+      }));
+    }
+  };
+
+  const dischargeMissionary = (m) => {
+    // Dar de baja por fin de servicio: cierra el tramo sin marcar reemplazo.
+    const today = new Date().toISOString().slice(0, 10);
+    setPairs(pairs.map((p) => {
+      if (p.branchId !== m.branchId) return p;
+      if (p.endDate) return p;
+      if (p.missionaryAId === m.id || p.missionaryBId === m.id) {
+        return { ...p, endDate: today, closedReason: "fin_de_servicio" };
+      }
+      return p;
+    }));
+    const account = accounts.find((a) => a.id === m.accountId);
+    if (account) setAccounts(accounts.map((a) => (a.id === account.id ? { ...a, active: false } : a)));
   };
 
   const runVerification = async () => {
@@ -2609,6 +3259,23 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
     } catch (e) {
       setVerification({ status: "error", message: e.message });
     }
+  };
+
+  const createBranchCode = (type) => {
+    if (!myBranch) return;
+    const code = genRegistrationCode(type, myBranch.name);
+    setBranches(branches.map((b) => {
+      if (b.id !== myBranch.id) return b;
+      const codesKey = type === "member" ? "memberCodes" : "missionaryCodes";
+      const nextCodes = [...(Array.isArray(b[codesKey]) ? b[codesKey] : [])];
+      nextCodes.push({ type, code, used: false, createdAt: new Date().toISOString() });
+      return {
+        ...b,
+        [codesKey]: nextCodes,
+        ...(type === "member" && !b.inviteCode ? { inviteCode: code } : {}),
+        ...(type === "missionary" && !b.missionaryCode ? { missionaryCode: code } : {}),
+      };
+    }));
   };
 
   const transferMissionary = (missionary, targetBranchId) => {
@@ -2629,15 +3296,20 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
   };
 
   const handleRegisterSubmit = (formData, centralResult) => {
+    const memberCode = genInviteCode(formData.name);
     const newBranch = {
       id: centralResult.branchId, ...formData, status: "pending", verification: "pending",
       adminId: session.id,
       parentBranchId: session.invitedByBranchId || null,
       serverBranchId: formData.serverBranchId || null,
-      inviteCode: genInviteCode(formData.name),
-      missionaryCode: genMissionaryCode(formData.name),
+      inviteCode: memberCode,
+      memberCodes: [{ type: "member", code: memberCode, used: false, createdAt: new Date().toISOString() }],
+      missionaryCodes: [],
       visitorCode: genVisitorCode(formData.name),
       visitorCodeExpiresAt: addMonths(new Date(), 3).toISOString(),
+      themeColor: "#1f5c3f",
+      logoUrl: "",
+      bannerUrl: "",
       createdAt: new Date().toISOString(),
     };
     setBranches([...branches, newBranch]);
@@ -2680,17 +3352,45 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
 
       <div className="code-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginBottom: 20 }}>
         <div style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 11, color: "#767670", marginBottom: 4 }}>Código de miembros</div>
-          <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 8, wordBreak: "break-all" }}>{myBranch.inviteCode}</div>
-          <button onClick={() => copy("member", myBranch.inviteCode)} className="btn-secondary" style={{ ...secondaryBtn, display: "flex", alignItems: "center", gap: 5, fontSize: 11, padding: "5px 8px" }}>
-            <Copy size={12} /> {copiedCode === "member" ? "Copiado" : "Copiar"}
+          <div style={{ fontSize: 11, color: "#767670", marginBottom: 4 }}>Códigos de registro para miembros</div>
+          {Array.isArray(myBranch.memberCodes) && myBranch.memberCodes.length > 0 ? (
+            myBranch.memberCodes.map((codeObj, index) => (
+              <div key={`${codeObj.code}-${index}`} style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 500, fontSize: 14, wordBreak: "break-all" }}>{codeObj.code}</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <Badge tone={codeObj.used ? "muted" : "approved"}>{codeObj.used ? "usado" : "disponible"}</Badge>
+                  <button onClick={() => copy(`member-${codeObj.code}`, codeObj.code)} className="btn-secondary" style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11 }}>
+                    <Copy size={12} /> {copiedCode === `member-${codeObj.code}` ? "Copiado" : "Copiar"}
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={{ fontSize: 12, color: "#767670", marginBottom: 10 }}>No hay códigos generados aún.</div>
+          )}
+          <button onClick={() => createBranchCode("member")} className="btn-primary" style={{ ...primaryBtn, fontSize: 11, padding: "8px 10px", width: "100%" }}>
+            Generar código de miembro
           </button>
         </div>
         <div style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 11, color: "#767670", marginBottom: 4 }}>Código de misioneros</div>
-          <div style={{ fontWeight: 500, fontSize: 15, marginBottom: 8, wordBreak: "break-all" }}>{myBranch.missionaryCode}</div>
-          <button onClick={() => copy("missionary", myBranch.missionaryCode)} className="btn-secondary" style={{ ...secondaryBtn, display: "flex", alignItems: "center", gap: 5, fontSize: 11, padding: "5px 8px" }}>
-            <Copy size={12} /> {copiedCode === "missionary" ? "Copiado" : "Copiar"}
+          <div style={{ fontSize: 11, color: "#767670", marginBottom: 4 }}>Códigos de registro para misioneros</div>
+          {Array.isArray(myBranch.missionaryCodes) && myBranch.missionaryCodes.length > 0 ? (
+            myBranch.missionaryCodes.map((codeObj, index) => (
+              <div key={`${codeObj.code}-${index}`} style={{ marginBottom: 10 }}>
+                <div style={{ fontWeight: 500, fontSize: 14, wordBreak: "break-all" }}>{codeObj.code}</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <Badge tone={codeObj.used ? "muted" : "approved"}>{codeObj.used ? "usado" : "disponible"}</Badge>
+                  <button onClick={() => copy(`missionary-${codeObj.code}`, codeObj.code)} className="btn-secondary" style={{ ...secondaryBtn, padding: "5px 8px", fontSize: 11 }}>
+                    <Copy size={12} /> {copiedCode === `missionary-${codeObj.code}` ? "Copiado" : "Copiar"}
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={{ fontSize: 12, color: "#767670", marginBottom: 10 }}>No hay códigos generados aún.</div>
+          )}
+          <button onClick={() => createBranchCode("missionary")} className="btn-primary" style={{ ...primaryBtn, fontSize: 11, padding: "8px 10px", width: "100%" }}>
+            Generar código de misionero
           </button>
         </div>
         <div style={{ border: "1px solid #e4e4e0", borderRadius: 12, padding: 14 }}>
@@ -2708,6 +3408,7 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
         </div>
       </div>
 
+      <BrandingConfigCard key={`branding-${myBranch.id}`} myBranch={myBranch} branches={branches} setBranches={setBranches} />
       <FederationCodesCard myBranch={myBranch} branchApiKey={myCredential?.apiKey} />
       <ServerConfigCard key={myBranch.id} myBranch={myBranch} branches={branches} setBranches={setBranches} />
       <SiteConfigCard key={`site-${myBranch.id}`} myBranch={myBranch} branches={branches} setBranches={setBranches} />
@@ -2740,6 +3441,11 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
                   <button onClick={() => toggleMissionaryActive(m)} className="btn-secondary" style={{ ...secondaryBtn, fontSize: 10, padding: "5px 7px", whiteSpace: "nowrap" }}>
                     {active ? "Marcar reemplazado" : "Reactivar"}
                   </button>
+                  {active && (
+                    <button onClick={() => dischargeMissionary(m)} className="btn-secondary" style={{ ...secondaryBtn, fontSize: 10, padding: "5px 7px", whiteSpace: "nowrap" }}>
+                      Dar de baja
+                    </button>
+                  )}
                   {otherApprovedBranches.length > 0 && (
                     <button onClick={() => setTransferTarget(m)} className="btn-secondary" style={{ ...secondaryBtn, fontSize: 10, padding: "5px 7px", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 4 }}>
                       <ArrowRightLeft size={10} /> Transferir
@@ -2763,6 +3469,7 @@ function AdminView({ branches, setBranches, speakers, photos, setPhotos, mission
           <div key={p.id} style={{ border: "1px solid #e4e4e0", borderRadius: 10, overflow: "hidden" }}>
             <img src={p.dataUrl} alt={p.caption} style={{ width: "100%", height: 180, objectFit: "contain", background: "#f4f4f1", display: "block" }} />
             <div style={{ padding: 6, fontSize: 11 }}>
+              {p.missionaryName && <div style={{ fontSize: 11, color: "#1f5c3f", marginBottom: 4 }}>Misionero vinculado: {p.missionaryName}</div>}
               <div style={{ color: "#767670", marginBottom: 4 }}>{p.author}</div>
               <div style={{ display: "flex", gap: 6 }}>
                 {p.status === "pending" && <button onClick={() => setPhotos(photos.map((x) => (x.id === p.id ? { ...x, status: "approved" } : x)))}
@@ -2825,9 +3532,12 @@ export default function App() {
   const [events, setEvents, eventsLoaded] = useStore(STORAGE_KEYS.EVENTS, []);
   const [speakers, setSpeakers] = useStore(STORAGE_KEYS.SPEAKERS, []);
   const [ordinances, setOrdinances] = useStore(STORAGE_KEYS.ORDINANCES, []);
-  const [members, setMembers] = useStore(STORAGE_KEYS.MEMBERS, []);
   const [photos, setPhotos] = useStore(STORAGE_KEYS.PHOTOS, []);
+  const [members, setMembers] = useStore(STORAGE_KEYS.MEMBERS, []);
   const [messages, setMessages] = useStore(STORAGE_KEYS.MESSAGES, []);
+  const [joinRequests, setJoinRequests] = useStore(STORAGE_KEYS.JOIN_REQUESTS, []);
+  const [pairs, setPairs] = useStore(STORAGE_KEYS.PAIRS, []);
+  const [typingStatuses, setTypingStatuses] = useStore(STORAGE_KEYS.TYPING_STATUSES, []);
   const [accounts, setAccounts, accountsLoaded] = useStore(STORAGE_KEYS.ACCOUNTS, []);
   const [missionaries, setMissionaries] = useStore(STORAGE_KEYS.MISSIONARIES, []);
   const [companionships, setCompanionships] = useStore(STORAGE_KEYS.COMPANIONSHIPS, []);
@@ -2846,6 +3556,7 @@ export default function App() {
 
   const [view, setView] = useState("welcome");
   const [selectedBranch, setSelectedBranch] = useState(null);
+  const [activeBranchId, setActiveBranchId] = useState(seedBranch.id);
   const [session, setSession] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
   const accountsRef = useRef(accounts);
@@ -2853,6 +3564,12 @@ export default function App() {
   useEffect(() => {
     accountsRef.current = accounts;
   }, [accounts]);
+
+  useEffect(() => {
+    if (session?.branchId && session.branchId !== activeBranchId) {
+      setActiveBranchId(session.branchId);
+    }
+  }, [session, activeBranchId]);
 
   useEffect(() => {
     let mounted = true;
@@ -2948,9 +3665,13 @@ export default function App() {
     if (branches.length === 0) {
       const b = { ...seedBranch, adminId: null };
       b.inviteCode = genInviteCode(b.name);
-      b.missionaryCode = genMissionaryCode(b.name);
+      b.memberCodes = [{ type: "member", code: b.inviteCode, used: false, createdAt: b.createdAt }];
+      b.missionaryCodes = [];
       b.visitorCode = genVisitorCode(b.name);
       b.visitorCodeExpiresAt = addMonths(new Date(), 3).toISOString();
+      b.themeColor = "#1f5c3f";
+      b.logoUrl = "";
+      b.bannerUrl = "";
       setBranches([b]);
       return;
     }
@@ -2958,7 +3679,10 @@ export default function App() {
     const next = branches.map((b) => {
       const patch = {};
       if (!b.inviteCode) { patch.inviteCode = genInviteCode(b.name); changed = true; }
-      if (!b.missionaryCode) { patch.missionaryCode = genMissionaryCode(b.name); changed = true; }
+      if (!b.memberCodes) { patch.memberCodes = [{ type: "member", code: patch.inviteCode || b.inviteCode, used: false, createdAt: b.createdAt || new Date().toISOString() }].filter(Boolean); changed = true; }
+      if (b.memberCodes && b.memberCodes.length === 0 && b.inviteCode) { patch.memberCodes = [{ type: "member", code: b.inviteCode.toUpperCase(), used: false, createdAt: b.createdAt || new Date().toISOString() }]; changed = true; }
+      if (!b.missionaryCodes) { patch.missionaryCodes = b.missionaryCode ? [{ type: "missionary", code: b.missionaryCode.toUpperCase(), used: false, createdAt: b.createdAt || new Date().toISOString() }] : []; changed = true; }
+      if (b.missionaryCodes && b.missionaryCodes.length === 0 && b.missionaryCode) { patch.missionaryCodes = [{ type: "missionary", code: b.missionaryCode.toUpperCase(), used: false, createdAt: b.createdAt || new Date().toISOString() }]; changed = true; }
       if (!b.visitorCode) {
         patch.visitorCode = genVisitorCode(b.name);
         patch.visitorCodeExpiresAt = addMonths(new Date(), 3).toISOString();
@@ -2967,10 +3691,13 @@ export default function App() {
       if (b.parentBranchId === undefined) { patch.parentBranchId = null; changed = true; }
       if (b.serverBranchId === undefined) { patch.serverBranchId = null; changed = true; }
       if (b.siteUrl === undefined) { patch.siteUrl = ""; changed = true; }
+      if (b.themeColor === undefined) { patch.themeColor = "#1f5c3f"; changed = true; }
+      if (b.logoUrl === undefined) { patch.logoUrl = ""; changed = true; }
+      if (b.bannerUrl === undefined) { patch.bannerUrl = ""; changed = true; }
       if (b.status === undefined) { patch.status = "approved"; changed = true; }
       if (b.verification === undefined) { patch.verification = b.id === seedBranch.id ? "verified" : "pending"; changed = true; }
       if (b.adminId === undefined) { patch.adminId = null; changed = true; }
-      return Object.keys(patch).length ? { ...b, ...patch } : b;
+      return Object.keys(patch).length ? normalizeBranchCodes({ ...b, ...patch }) : normalizeBranchCodes(b);
     });
     if (changed) setBranches(next);
   }, [branchesLoaded]);
@@ -2989,15 +3716,16 @@ export default function App() {
     }
   }, [accounts]);
 
-  const primaryBranchId = seedBranch.id;
-
   const handleSelectBranch = (branch) => {
     if (branch.siteUrl && branch.siteUrl.trim()) {
       window.open(branch.siteUrl.trim(), "_blank", "noopener,noreferrer");
     } else {
+      setActiveBranchId(branch.id);
       setSelectedBranch(branch);
     }
   };
+
+  const activeBranch = branches.find((b) => b.id === activeBranchId) || seedBranch;
 
   const missionariesWithStatus = useMemo(() => {
     return missionaries.map((m) => {
@@ -3030,10 +3758,10 @@ export default function App() {
         setSession(null);
         setView("welcome");
       }}
-        chatUnread={chatUnread} speakerGaps={speakerGaps} />
+        chatUnread={chatUnread} speakerGaps={speakerGaps} brandColor={activeBranch.themeColor || "#1f5c3f"} />
 
       {view === "login" && (
-        <LoginView accounts={accounts} setAccounts={setAccounts} branches={branches}
+        <LoginView accounts={accounts} setAccounts={setAccounts} branches={branches} setBranches={setBranches}
           adminCodes={adminCodes} setAdminCodes={setAdminCodes}
           onLogin={(acc) => { setSession(acc); setView("directory"); }} />
       )}
@@ -3041,24 +3769,25 @@ export default function App() {
       {view === "directory" && (
         selectedBranch ? (
           <BranchDetail branch={selectedBranch} branches={branches} events={events} ordinances={ordinances} onBack={() => setSelectedBranch(null)}
-            primaryBranchId={primaryBranchId} onGoMissionaries={() => { setSelectedBranch(null); setView("missionaries"); }}
-            onSelectBranch={handleSelectBranch} />
+            branchId={activeBranchId} onGoMissionaries={() => { setSelectedBranch(null); setView("missionaries"); }}
+            onSelectBranch={handleSelectBranch} session={session} joinRequests={joinRequests} setJoinRequests={setJoinRequests} />
         ) : (
           <DirectoryView branches={branches} onOpenBranch={handleSelectBranch} onGoJoin={() => setView("login")} session={session} />
         )
       )}
 
       {view === "red" && <ManifestoView />}
-      {view === "calendar" && <CalendarView events={events} setEvents={setEvents} branchId={primaryBranchId} session={session} members={members} ordinances={ordinances} />}
-      {view === "speakers" && <SpeakersView speakers={speakers} setSpeakers={setSpeakers} branchId={primaryBranchId} session={session} />}
-      {view === "members" && <MembersView members={members} setMembers={setMembers} branchId={primaryBranchId} session={session} roles={roles} />}
+      {view === "calendar" && <CalendarView events={events} setEvents={setEvents} branchId={activeBranchId} session={session} members={members} ordinances={ordinances} setOrdinances={setOrdinances} />}
+      {view === "speakers" && <SpeakersView speakers={speakers} setSpeakers={setSpeakers} branchId={activeBranchId} session={session} />}
+      {view === "members" && <MembersView members={members} setMembers={setMembers} branchId={activeBranchId} session={session} roles={roles} />}
       {view === "missionaries" && (
         <MissionariesView missionaries={missionariesWithStatus} setMissionaries={setMissionaries} companionships={companionships}
-          setCompanionships={setCompanionships} session={session} primaryBranchId={primaryBranchId} />
+          setCompanionships={setCompanionships} photos={photos} session={session} branchId={activeBranchId} pairs={pairs} setPairs={setPairs} />
       )}
-      {view === "photos" && <PhotosView photos={photos} setPhotos={setPhotos} branchId={primaryBranchId} session={session} />}
+      {view === "timeline" && <NetworkPairsTimeline pairs={pairs} missionaries={missionaries} branches={branches} photos={photos} />}
+      {view === "photos" && <PhotosView photos={photos} setPhotos={setPhotos} branchId={activeBranchId} session={session} missionaries={missionaries} />}
       {view === "welcome" && <WelcomeView welcomePage={welcomePage} photos={photos} onExplore={() => setView("directory")} onLogin={() => setView("login")} />}
-      {view === "chat" && <ChatView messages={messages} setMessages={setMessages} branchId={primaryBranchId} session={session} />}
+      {view === "chat" && <ChatView messages={messages} setMessages={setMessages} branchId={activeBranchId} session={session} typingStatuses={typingStatuses} setTypingStatuses={setTypingStatuses} />}
       {view === "admin" && (
         !session ? (
           <div className="container-page" style={{ padding: 60, textAlign: "center" }}>
@@ -3067,11 +3796,11 @@ export default function App() {
             <div style={{ fontSize: 13, color: "#767670" }}>Inicia sesión con una cuenta de administrador de rama.</div>
           </div>
         ) : session.role === "admin" ? (
-          <AdminView branches={branches} setBranches={setBranches} speakers={speakers} photos={photos} setPhotos={setPhotos}
+          <AdminView branches={branches} setBranches={setBranches} speakers={speakers} setSpeakers={setSpeakers} photos={photos} setPhotos={setPhotos}
             missionaries={missionaries} setMissionaries={setMissionaries} accounts={accounts} setAccounts={setAccounts}
             session={session} events={events} ordinances={ordinances} members={members} companionships={companionships}
             messages={messages} setMessages={setMessages} branchCredentials={branchCredentials} setBranchCredentials={setBranchCredentials}
-            welcomePage={welcomePage} setWelcomePage={setWelcomePage} roles={roles} setRoles={setRoles} />
+            welcomePage={welcomePage} setWelcomePage={setWelcomePage} roles={roles} setRoles={setRoles} pairs={pairs} setPairs={setPairs} />
         ) : (
           <div className="container-page" style={{ padding: 60, textAlign: "center" }}>
             <AlertCircle size={24} color="#9a9a92" style={{ marginBottom: 10 }} />

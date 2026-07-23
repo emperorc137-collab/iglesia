@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS photos (
   url TEXT NOT NULL,
   description TEXT,
   uploadedBy TEXT,
+  missionaryId TEXT REFERENCES missionaries(id),
+  missionaryName TEXT,
   status TEXT DEFAULT 'pending',
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

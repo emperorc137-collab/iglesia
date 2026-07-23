@@ -350,7 +350,7 @@ function MapLegend() {
         <span style={{ width: 18, height: 0, borderTop: "2px dashed #1f5c3f" }} /> Invitación
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <span style={{ width: 18, height: 0, borderTop: "2px dotted #0c447c" }} /> Servidor compartido
+        <span style={{ width: 18, height: 0, borderTop: "2px dotted #0c447c" }} /> Servidor
       </div>
     </div>
   );
@@ -361,7 +361,7 @@ function ManifestoView() {
     { icon: GitBranch, title: "Cada rama es dueña de su copia", body: "Todas las ramas corren el mismo código base, pero cada una aloja su propia copia en su propio dominio." },
     { icon: Network, title: "Conectadas por invitación", body: "Una rama nueva se une porque el administrador de una rama existente le entrega un código de invitación." },
     { icon: ShieldCheck, title: "Verificación central", body: "Un servidor central valida la API key y el código de invitación de cada rama antes de que aparezca en el directorio público." },
-    { icon: Server, title: "Servidor propio o compartido", body: "Cada rama puede alojar sus propios datos o usar el servidor de otra rama de confianza." },
+    { icon: Server, title: "Servidor propio o de confianza", body: "Cada rama puede alojar sus propios datos o usar el servidor de otra rama de confianza." },
     { icon: Download, title: "Tus datos son tuyos", body: "Desde el panel de administración puedes exportar todos tus datos en JSON en cualquier momento." },
   ];
   return (
